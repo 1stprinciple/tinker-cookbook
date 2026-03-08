@@ -17,19 +17,32 @@ import chz
 import numpy as np
 import tinker
 import torch
+from fireworks.training.sdk import (
+    DeploymentSampler,
+    FiretitanServiceClient,
+    FiretitanTrainingClient,
+)
 from tinker.types import LossFnType
 from tqdm import tqdm
+from transformers import AutoTokenizer
 
 from tinker_cookbook import checkpoint_utils
-from tinker_cookbook.completers import TinkerTokenCompleter
+from tinker_cookbook.completers import FireworksTokenCompleter
 from tinker_cookbook.display import colorize_example
-from tinker_cookbook.eval.evaluators import SamplingClientEvaluator, SamplingClientEvaluatorBuilder
+from tinker_cookbook.eval.evaluators import (
+    SamplingClientEvaluator,
+    SamplingClientEvaluatorBuilder,
+)
 from tinker_cookbook.rl.data_processing import (
     assemble_training_data,
     compute_advantages,
     remove_constant_reward_groups,
 )
-from tinker_cookbook.rl.metric_util import RLTestSetEvaluator, compute_trajectory_metrics
+from tinker_cookbook.rl.hot_load import trigger_and_wait_for_hot_load
+from tinker_cookbook.rl.metric_util import (
+    RLTestSetEvaluator,
+    compute_trajectory_metrics,
+)
 from tinker_cookbook.rl.metrics import (
     compute_kl_sample_train,
     compute_post_kl,
@@ -73,18 +86,29 @@ class KLReferenceConfig:
 async def gather_with_progress(
     coroutines: Iterable[Coroutine[Any, Any, T]],
     desc: str,
+    max_concurrency: int | None = None,
 ) -> list[T]:
     """
     Run coroutines concurrently with a progress bar that updates as each completes.
 
     This preserves the order of results (like asyncio.gather) while providing
     real-time progress feedback as individual coroutines complete.
+
+    If *max_concurrency* is set, at most that many coroutines run at the same time
+    (prevents httpx PoolTimeout when many rollouts hit the sampler).
     """
     coroutine_list = list(coroutines)
     pbar = tqdm(total=len(coroutine_list), desc=desc)
+    if not max_concurrency:
+        max_concurrency = 8
+    semaphore = asyncio.Semaphore(max_concurrency)
 
     async def track(coro: Coroutine[Any, Any, T]) -> T:
-        result = await coro
+        if semaphore:
+            async with semaphore:
+                result = await coro
+        else:
+            result = await coro
         pbar.update(1)
         return result
 
@@ -247,7 +271,7 @@ def _training_logprobs_from_fwd_bwd(
 @scope
 async def train_step(
     data_D: List[tinker.Datum],
-    training_client: tinker.TrainingClient,
+    training_client: FiretitanTrainingClient,
     learning_rate: float,
     num_substeps: int,
     loss_fn: LossFnType,
@@ -387,6 +411,9 @@ class Config:
     # -------------------------------------------------------------------------
     # Sampling and diagnostics (advanced)
     # -------------------------------------------------------------------------
+    # Max concurrent rollout groups during sampling (None = no limit).
+    # Lower this to avoid httpx PoolTimeout when the sampler connection pool is small.
+    max_concurrent_rollouts: int | None = None
     # Changing sampling temperature is not generally recommended; T=1 is near-optimal
     # for most post-trained models, and non-1 temperatures currently do not play
     # well with KL penalty.
@@ -423,7 +450,7 @@ async def run_single_evaluation(
     evaluator: SamplingClientEvaluator,
     cfg: Config,
     i_batch: int,
-    sampling_client: tinker.SamplingClient,
+    sampling_client: DeploymentSampler,
     evaluator_label: str,
 ) -> dict[str, Any]:
     ev_name = _get_evaluator_name(evaluator)
@@ -457,7 +484,7 @@ async def run_single_evaluation(
 @scope
 async def run_evaluations_parallel(
     evaluators: list[SamplingClientEvaluator],
-    sampling_client: tinker.SamplingClient,
+    sampling_client: DeploymentSampler,
     cfg: Config,
     i_batch: int,
 ) -> dict[str, Any]:
@@ -491,8 +518,8 @@ async def do_sync_training_with_stream_minibatch(
     end_batch: int,
     num_batches: int,
     cfg: Config,
-    training_client: tinker.TrainingClient,
-    kl_reference_client: tinker.SamplingClient | None,
+    training_client: FiretitanTrainingClient,
+    kl_reference_client: DeploymentSampler | None,
     evaluators: list[SamplingClientEvaluator],
     dataset: RLDataset,
     ml_logger: ml_log.Logger,
@@ -629,8 +656,8 @@ async def do_async_training(
     end_batch: int,
     num_batches: int,
     cfg: Config,
-    training_client: tinker.TrainingClient,
-    kl_reference_client: tinker.SamplingClient | None,
+    training_client: FiretitanTrainingClient,
+    kl_reference_client: DeploymentSampler | None,
     evaluators: list[SamplingClientEvaluator],
     dataset: RLDataset,
     ml_logger: ml_log.Logger,
@@ -656,9 +683,13 @@ async def do_async_training(
         kind="both",
         ttl_seconds=cfg.ttl_seconds,
     )
-
     # This will be updated by the training loop
-    sampling_client = training_client.create_sampling_client(path_dict["sampler_path"])
+    sampling_client = DeploymentSampler(
+        "http://localhost:8902",
+        "rlor_model",
+        api_key="local",
+        tokenizer=AutoTokenizer.from_pretrained("Qwen/Qwen3-4B-Instruct-2507", trust_remote_code=True),
+    )
     sampling_client_step = start_batch
     sampling_client_updated_event = asyncio.Event()
     sampling_client_updated_event.set()
@@ -863,9 +894,17 @@ async def do_async_training(
             sampling_client_eval_step = sampling_client_step
             sampling_client_eval = sampling_client
             if cfg.eval_every > 0 and sampling_client_eval_step % cfg.eval_every == 0:
+                eval_semaphore = asyncio.Semaphore(8)
+
+                async def run_eval(evaluator: SamplingClientEvaluator) -> dict[str, Any]:
+                    async with eval_semaphore:
+                        return await evaluator(sampling_client_eval)
+
                 with timed("run_evals", metrics):
-                    for evaluator in evaluators:
-                        eval_metrics = await evaluator(sampling_client_eval)
+                    results = await asyncio.gather(
+                        *[run_eval(ev) for ev in evaluators]
+                    )
+                    for eval_metrics in results:
                         metrics.update({f"test/{k}": v for k, v in eval_metrics.items()})
                 metrics["time/evaluation_loop/total"] = time.time() - t_start
                 ml_logger.log_metrics(metrics, step=sampling_client_eval_step)
@@ -885,48 +924,77 @@ async def do_async_training(
 
 @scope
 async def do_group_rollout_and_filter_constant_reward(
-    sampling_client: tinker.SamplingClient,
+    sampling_client: DeploymentSampler,
     env_group_builder: EnvGroupBuilder,
     max_tokens: int,
     temperature: float,
     do_remove_constant_reward_groups: bool,
     enable_logging: bool = True,
+    max_retries: int = 3,
 ) -> TrajectoryGroup | None:
-    policy = TinkerTokenCompleter(sampling_client, max_tokens=max_tokens, temperature=temperature)
+    for attempt in range(max_retries):
+        try:
+            policy = FireworksTokenCompleter(sampling_client)
 
-    with logtree.optional_enable_logging(enable_logging):
-        trajectory_group = await do_group_rollout(env_group_builder, policy)
+            with logtree.optional_enable_logging(enable_logging):
+                trajectory_group = await do_group_rollout(env_group_builder, policy)
 
-    # Remove if all trajectories have the same reward
-    if do_remove_constant_reward_groups and all_same(trajectory_group.get_total_rewards()):
-        return None
-    else:
-        return trajectory_group
+            if do_remove_constant_reward_groups and all_same(trajectory_group.get_total_rewards()):
+                return None
+            return trajectory_group
+        except Exception as e:
+            if attempt < max_retries - 1 and "Timeout" in type(e).__name__:
+                wait = 2 ** attempt
+                logger.warning(
+                    f"Rollout attempt {attempt + 1}/{max_retries} failed with {type(e).__name__}, "
+                    f"retrying in {wait}s..."
+                )
+                await asyncio.sleep(wait)
+            else:
+                raise
 
 
 @scope
 async def save_checkpoint_and_get_sampling_client(
-    training_client: tinker.TrainingClient,
+    training_client: FiretitanTrainingClient,
     i_batch: int,
     log_path: str,
     save_every: int,
     start_batch: int = 0,
     ttl_seconds: int | None = None,
-) -> tuple[tinker.SamplingClient, dict[str, Any]]:
+) -> tuple[DeploymentSampler, dict[str, Any]]:
     metrics = {}
+    name = f"{i_batch:06d}"
     with timed("save_checkpoint", metrics):
         if save_every > 0 and i_batch > start_batch and i_batch % save_every == 0:
             path_dict = await checkpoint_utils.save_checkpoint_async(
                 training_client=training_client,
-                name=f"{i_batch:06d}",
+                name=name,
                 log_path=log_path,
                 loop_state={"batch": i_batch},
                 kind="both",
                 ttl_seconds=ttl_seconds,
             )
-            return training_client.create_sampling_client(path_dict["sampler_path"]), metrics
         else:
-            return await training_client.save_weights_and_get_sampling_client_async(), metrics
+            path_dict = await checkpoint_utils.save_checkpoint_async(
+                training_client=training_client,
+                name=name,
+                log_path=log_path,
+                loop_state={"batch": i_batch},
+                kind="sampler",
+                ttl_seconds=ttl_seconds,
+            )
+        if trigger_and_wait_for_hot_load("http://localhost:8902", path_dict["sampler_path"]):
+            logger.info(f"Successfully hot-loaded checkpoint {path_dict["sampler_path"]}")
+            return DeploymentSampler(
+                "http://localhost:8902",
+                "rlor_model",
+                api_key="local",
+                tokenizer=AutoTokenizer.from_pretrained("Qwen/Qwen3-4B-Instruct-2507", trust_remote_code=True),
+            ), metrics
+        else:
+            logger.warning(f"Failed to hot-load checkpoint {path_dict["sampler_path"]}")
+            return None, metrics
 
 
 @scope
@@ -934,7 +1002,7 @@ async def prepare_minibatch(
     env_group_builders_P: Sequence[EnvGroupBuilder],
     trajectory_groups_P: list[TrajectoryGroup],
     tokenizer: Tokenizer,
-    kl_reference_client: tinker.SamplingClient | None,
+    kl_reference_client: DeploymentSampler | None,
     kl_penalty_coef: float,
     kl_discount_factor: float,
 ) -> tuple[list[tinker.Datum], dict[str, Any]]:
@@ -970,7 +1038,7 @@ async def prepare_minibatch(
 
 @scope
 async def compute_full_batch_metrics_and_get_sampling_client(
-    training_client: tinker.TrainingClient,
+    training_client: FiretitanTrainingClient,
     i_batch: int,
     data_D: list[tinker.Datum],
     training_logprobs_D: list[torch.Tensor],
@@ -978,7 +1046,7 @@ async def compute_full_batch_metrics_and_get_sampling_client(
     save_every: int,
     do_compute_post_kl: bool,
     ttl_seconds: int | None = None,
-) -> tuple[tinker.SamplingClient, dict[str, Any]]:
+) -> tuple[DeploymentSampler, dict[str, Any]]:
     """
     At the end of the iteration, this will compute metrics for the full batch
     and return the latest sampling client.
@@ -989,9 +1057,10 @@ async def compute_full_batch_metrics_and_get_sampling_client(
     metrics = {}
 
     # Compute KL metrics
-    with timed("compute_kl_sample_train", metrics):
-        kl_sample_train_metrics = compute_kl_sample_train(data_D, training_logprobs_D)
-        metrics.update(kl_sample_train_metrics)
+    # TODO: add logprobs once ready.
+    # with timed("compute_kl_sample_train", metrics):
+    #     kl_sample_train_metrics = compute_kl_sample_train(data_D, training_logprobs_D)
+    #     metrics.update(kl_sample_train_metrics)
 
     # Get a sampling client using the new weights
     sampling_client, checkpoint_metrics = await save_checkpoint_and_get_sampling_client(
@@ -1013,11 +1082,11 @@ async def do_train_step_streaming_and_get_sampling_client(
     cfg: Config,
     i_batch: int,
     trajectory_groups_queue: asyncio.Queue[WrappedTrajectoryGroup | None],
-    training_client: tinker.TrainingClient,
-    kl_reference_client: tinker.SamplingClient | None,
+    training_client: FiretitanTrainingClient,
+    kl_reference_client: DeploymentSampler | None,
     tokenizer: Tokenizer,
     trajectory_group_filter: Callable[[WrappedTrajectoryGroup | None], bool] = lambda _: True,
-) -> tuple[tinker.SamplingClient, dict[str, Any], list[WrappedTrajectoryGroup]]:
+) -> tuple[DeploymentSampler, dict[str, Any], list[WrappedTrajectoryGroup]]:
     """
     As soon as we have enough trajectories for a minibatch, we will train on them.
     This allows us to overlap sampling and training.
@@ -1141,12 +1210,12 @@ async def do_train_step_streaming_and_get_sampling_client(
 async def do_train_step_and_get_sampling_client(
     cfg: Config,
     i_batch: int,
-    training_client: tinker.TrainingClient,
-    kl_reference_client: tinker.SamplingClient | None,
+    training_client: FiretitanTrainingClient,
+    kl_reference_client: DeploymentSampler | None,
     tokenizer: Tokenizer,
     env_group_builders_P: Sequence[EnvGroupBuilder],
     trajectory_groups_P: list[TrajectoryGroup],
-) -> tuple[tinker.SamplingClient, dict[str, Any]]:
+) -> tuple[DeploymentSampler, dict[str, Any]]:
     update_scope_context({"step": i_batch})
 
     metrics = {}
@@ -1193,8 +1262,8 @@ async def do_sync_training(
     end_batch: int,
     num_batches: int,
     cfg: Config,
-    training_client: tinker.TrainingClient,
-    kl_reference_client: tinker.SamplingClient | None,
+    training_client: FiretitanTrainingClient,
+    kl_reference_client: DeploymentSampler | None,
     evaluators: list[SamplingClientEvaluator],
     dataset: RLDataset,
     ml_logger: ml_log.Logger,
@@ -1247,6 +1316,7 @@ async def do_sync_training(
                     for i, builder in enumerate(env_group_builders_P)
                 ),
                 desc=f"Sampling batch {i_batch}",
+                max_concurrency=cfg.max_concurrent_rollouts,
             )
 
         _maybe_export_rollout_summary_jsonl(
@@ -1318,36 +1388,25 @@ async def main(
     else:
         start_batch = 0
 
-    service_client = tinker.ServiceClient(base_url=cfg.base_url)
+    service_client = FiretitanServiceClient(
+        base_url=cfg.base_url,
+        api_key="tml-local",
+    )
     user_metadata: dict[str, str] = {}
     if wandb_link := ml_logger.get_logger_url():
         user_metadata["wandb_link"] = wandb_link
     checkpoint_utils.add_renderer_name_to_user_metadata(user_metadata, cfg.renderer_name)
 
+    training_client = service_client.create_training_client(
+        base_model=cfg.model_name,
+        lora_rank=cfg.lora_rank,
+    )
     if resume_info:
-        # Resuming interrupted training - load optimizer state for proper continuation
-        await checkpoint_utils.check_renderer_name_for_checkpoint_async(
-            service_client, resume_info["state_path"], cfg.renderer_name
-        )
-        training_client = (
-            await service_client.create_training_client_from_state_with_optimizer_async(
-                resume_info["state_path"], user_metadata=user_metadata
-            )
-        )
-        logger.info(f"Resumed training from {resume_info['state_path']}")
+        logger.info(f"Loaded weights from {resume_info['state_path']}")
+        training_client.load_state_with_optimizer(resume_info["state_path"])
     elif cfg.load_checkpoint_path:
-        # Starting fresh from a checkpoint - load weights only (fresh optimizer)
-        await checkpoint_utils.check_renderer_name_for_checkpoint_async(
-            service_client, cfg.load_checkpoint_path, cfg.renderer_name
-        )
-        training_client = await service_client.create_training_client_from_state_async(
-            cfg.load_checkpoint_path, user_metadata=user_metadata
-        )
         logger.info(f"Loaded weights from {cfg.load_checkpoint_path}")
-    else:
-        training_client = await service_client.create_lora_training_client_async(
-            cfg.model_name, rank=cfg.lora_rank, user_metadata=user_metadata
-        )
+        training_client.load_state(cfg.load_checkpoint_path)
 
     # Get tokenizer from training client
     tokenizer = training_client.get_tokenizer()

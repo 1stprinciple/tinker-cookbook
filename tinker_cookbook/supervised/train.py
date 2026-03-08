@@ -8,6 +8,7 @@ refer to `tinker_cookbook/recipes/sl_loop.py`.
 """
 
 import asyncio
+import json
 import logging
 import os
 import time
@@ -15,6 +16,7 @@ from dataclasses import dataclass
 
 import chz
 import tinker
+from fireworks.training.sdk import FiretitanServiceClient, FiretitanTrainingClient
 from tinker.lib.public_interfaces import APIFuture
 
 from tinker_cookbook import checkpoint_utils
@@ -30,9 +32,12 @@ from tinker_cookbook.supervised.nll_evaluator import NLLEvaluator
 from tinker_cookbook.supervised.types import SupervisedDatasetBuilder
 from tinker_cookbook.tokenizer_utils import get_tokenizer
 from tinker_cookbook.utils import ml_log
-from tinker_cookbook.utils.lr_scheduling import compute_schedule_lr_multiplier, LRSchedule
+from tinker_cookbook.utils.lr_scheduling import (
+    LRSchedule,
+    compute_schedule_lr_multiplier,
+)
 from tinker_cookbook.utils.misc_utils import timed
-from tinker_cookbook.utils.trace import scope, update_scope_context, trace_init
+from tinker_cookbook.utils.trace import scope, trace_init, update_scope_context
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +66,9 @@ class Config:
 
     # Checkpointing and evaluation (0 = disabled for *_every fields)
     evaluator_builders: list[EvaluatorBuilder] = chz.field(default_factory=list)
-    infrequent_evaluator_builders: list[EvaluatorBuilder] = chz.field(default_factory=list)
+    infrequent_evaluator_builders: list[EvaluatorBuilder] = chz.field(
+        default_factory=list
+    )
     save_every: int = 20
     eval_every: int = 10
     infrequent_eval_every: int = 100
@@ -81,6 +88,7 @@ class Config:
 
 @dataclass
 class SubmittedBatch:
+    fwd_future: APIFuture[tinker.ForwardBackwardOutput]
     fwd_bwd_future: APIFuture[tinker.ForwardBackwardOutput]
     optim_step_future: APIFuture[tinker.OptimStepResponse]
     metrics: dict[str, int | float | str]
@@ -96,7 +104,7 @@ class SubmittedBatch:
 @scope
 async def run_evals(
     evaluators: list[Evaluator],
-    training_client: tinker.TrainingClient,
+    training_client: FiretitanTrainingClient,
     step: int,
 ) -> dict[str, float]:
     """Evaluate the current model weights and prefix results with ``test/``.
@@ -131,8 +139,10 @@ async def run_evals(
             nonlocal sampling_client
             if sampling_client is None:
                 # Snapshot the current pre-step weights and create a new sampling client.
-                sampling_client = await training_client.save_weights_and_get_sampling_client_async(
-                    f"evals_step_{step}"
+                sampling_client = (
+                    await training_client.save_weights_and_get_sampling_client_async(
+                        f"evals_step_{step}"
+                    )
                 )
             return await evaluator(sampling_client)
         else:
@@ -184,45 +194,55 @@ async def main(config: Config):
         if current_task is not None:
             current_task.set_name("main")
         trace_events_path = os.path.join(config.log_path, "trace_events.jsonl")
-        logger.info(f"Tracing is enabled. Trace events will be saved to {trace_events_path}")
+        logger.info(
+            f"Tracing is enabled. Trace events will be saved to {trace_events_path}"
+        )
         logger.info(
             f"Run `python tinker_cookbook/utils/trace.py {trace_events_path} trace.json` and visualize in chrome://tracing or https://ui.perfetto.dev/"
         )
         trace_init(output_file=os.path.join(config.log_path, "trace_events.jsonl"))
 
-    service_client = tinker.ServiceClient(base_url=config.base_url)
+    service_client = FiretitanServiceClient(
+        base_url=config.base_url,
+        api_key="tml-local",
+    )
 
     user_metadata: dict[str, str] = {}
     if wandb_link := ml_logger.get_logger_url():
         user_metadata["wandb_link"] = wandb_link
-    checkpoint_utils.add_renderer_name_to_user_metadata(user_metadata, config.renderer_name)
+    checkpoint_utils.add_renderer_name_to_user_metadata(
+        user_metadata, config.renderer_name
+    )
 
+    # TODO: Resume
+    # if resume_info:
+    #     # Resuming interrupted training - load optimizer state for proper continuation
+    #     await checkpoint_utils.check_renderer_name_for_checkpoint_async(
+    #         service_client, resume_info["state_path"], config.renderer_name
+    #     )
+    #     training_client = (
+    #         await service_client.create_training_client_from_state_with_optimizer_async(
+    #             resume_info["state_path"], user_metadata=user_metadata
+    #         )
+    #     )
+    #     logger.info(f"Resumed training from {resume_info['state_path']}")
+    # elif config.load_checkpoint_path:
+    #     # Starting fresh from a checkpoint - load weights only (fresh optimizer)
+    #     await checkpoint_utils.check_renderer_name_for_checkpoint_async(
+    #         service_client, config.load_checkpoint_path, config.renderer_name
+    #     )
+    #     training_client = await service_client.create_training_client_from_state_async(
+    #         config.load_checkpoint_path, user_metadata=user_metadata
+    #     )
+    #     logger.info(f"Loaded weights from {config.load_checkpoint_path}")
+    # else:
+    training_client = service_client.create_training_client(
+        base_model=config.model_name,
+        lora_rank=config.lora_rank,
+    )
     if resume_info:
-        # Resuming interrupted training - load optimizer state for proper continuation
-        await checkpoint_utils.check_renderer_name_for_checkpoint_async(
-            service_client, resume_info["state_path"], config.renderer_name
-        )
-        training_client = (
-            await service_client.create_training_client_from_state_with_optimizer_async(
-                resume_info["state_path"], user_metadata=user_metadata
-            )
-        )
-        logger.info(f"Resumed training from {resume_info['state_path']}")
-    elif config.load_checkpoint_path:
-        # Starting fresh from a checkpoint - load weights only (fresh optimizer)
-        await checkpoint_utils.check_renderer_name_for_checkpoint_async(
-            service_client, config.load_checkpoint_path, config.renderer_name
-        )
-        training_client = await service_client.create_training_client_from_state_async(
-            config.load_checkpoint_path, user_metadata=user_metadata
-        )
-        logger.info(f"Loaded weights from {config.load_checkpoint_path}")
-    else:
-        training_client = await service_client.create_lora_training_client_async(
-            base_model=config.model_name,
-            rank=config.lora_rank,
-            user_metadata=user_metadata,
-        )
+        logger.info(f"Loaded weights from {resume_info["state_path"]}")
+        training_client.load_state_with_optimizer(resume_info["state_path"])
 
     dataset, maybe_test_dataset = config.dataset_builder()
     n_batches = len(dataset)
@@ -234,7 +254,9 @@ async def main(config: Config):
     if maybe_test_dataset is not None:
         evaluators.append(NLLEvaluator.from_dataset(maybe_test_dataset))
 
-    infrequent_evaluators = [evaluator() for evaluator in config.infrequent_evaluator_builders]
+    infrequent_evaluators = [
+        evaluator() for evaluator in config.infrequent_evaluator_builders
+    ]
     logger.info(
         f"Training for {n_batches} batches x {config.num_epochs} epochs = {n_batches * config.num_epochs} steps"
     )
@@ -284,10 +306,14 @@ async def main(config: Config):
                     infrequent_evaluators, training_client, step
                 )
 
-        fwd_bwd_future = await training_client.forward_backward_async(data, loss_fn="cross_entropy")
+        fwd_future = await training_client.forward_async(data, "cross_entropy")
+        fwd_bwd_future = await training_client.forward_backward_async(
+            data, "cross_entropy"
+        )
         optim_step_future = await training_client.optim_step_async(adam_params)
 
         return SubmittedBatch(
+            fwd_future=fwd_future,
             fwd_bwd_future=fwd_bwd_future,
             optim_step_future=optim_step_future,
             metrics=metrics,
@@ -307,7 +333,11 @@ async def main(config: Config):
         metrics = submitted.metrics
         metrics["progress"] = min((submitted.step + 1) / progress_denominator, 1.0)
 
-        if config.save_every > 0 and submitted.step % config.save_every == 0 and submitted.step > 0:
+        if (
+            config.save_every > 0
+            and submitted.step % config.save_every == 0
+            and submitted.step > 0
+        ):
             with timed("save_checkpoint", metrics):
                 # Enqueue a checkpoint save after the forward/backward and optimizer
                 # requests for this step; the snapshot will reflect post-step weights.
@@ -315,21 +345,43 @@ async def main(config: Config):
                     training_client=training_client,
                     name=f"{submitted.step:06d}",
                     log_path=config.log_path,
-                    loop_state={"epoch": submitted.epoch_idx, "batch": submitted.batch_idx},
+                    loop_state={
+                        "epoch": submitted.epoch_idx,
+                        "batch": submitted.batch_idx,
+                    },
                     kind="both",
                     ttl_seconds=config.ttl_seconds,
                 )
 
         with timed("step", metrics):
+            fwd_result = await submitted.fwd_future.result_async()
             fwd_bwd_result = await submitted.fwd_bwd_future.result_async()
             optim_step_result = await submitted.optim_step_future.result_async()
 
         if optim_step_result.metrics:
             metrics.update(optim_step_result.metrics)
+        if fwd_bwd_result.metrics:
+            metrics.update(fwd_bwd_result.metrics)
 
-        logprobs = [x["logprobs"] for x in fwd_bwd_result.loss_fn_outputs]
-        weights = [datum.loss_fn_inputs["weights"] for datum in submitted.data]
-        train_nll = compute_mean_nll(logprobs, weights)
+        logprobs_td = [output["logprobs"] for output in fwd_result.loss_fn_outputs]
+        weights_td = [datum.loss_fn_inputs["weights"] for datum in submitted.data]
+        train_mean_nll = compute_mean_nll(logprobs_td, weights_td)
+        metrics["train_mean_nll"] = train_mean_nll
+
+        custom_metrics_path = os.path.join(config.log_path, "custom_metrics.jsonl")
+        with open(custom_metrics_path, "a") as f:
+            for i, datum in enumerate(submitted.data):
+                token_ids = datum.loss_fn_inputs["target_tokens"].data
+                lp_values = logprobs_td[i].tolist()
+                weights = datum.loss_fn_inputs["weights"].data
+                record = {
+                    "step": submitted.step,
+                    "datum": i,
+                    "token_ids": token_ids,
+                    "logprobs": lp_values,
+                    "weights": weights,
+                }
+                f.write(json.dumps(record) + "\n")
 
         metrics.update(
             num_sequences=len(submitted.data),
@@ -337,7 +389,6 @@ async def main(config: Config):
             num_loss_tokens=sum(
                 sum(datum.loss_fn_inputs["weights"].data) for datum in submitted.data
             ),
-            train_mean_nll=train_nll,
         )
         metrics["time/total"] = time.time() - submitted.batch_start_time
 
