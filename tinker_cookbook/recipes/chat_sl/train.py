@@ -4,16 +4,21 @@ Basic CLI for training with supervised learning. Currently only used for integra
 """
 
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
 import chz
+from tinker_cookbook.fireworks.utils import ReconnectableClient, create_trainer_job, setup_deployment
 
 from tinker_cookbook import checkpoint_utils, cli_utils, renderers
 from tinker_cookbook.eval.evaluators import EvaluatorBuilder
 from tinker_cookbook.recipes.chat_sl import chat_datasets
 from tinker_cookbook.supervised import train
 from tinker_cookbook.supervised.data import FromConversationFileBuilder
-from tinker_cookbook.supervised.types import ChatDatasetBuilder, ChatDatasetBuilderCommonConfig
+from tinker_cookbook.supervised.types import (
+    ChatDatasetBuilder,
+    ChatDatasetBuilderCommonConfig,
+)
 from tinker_cookbook.utils.lr_scheduling import LRSchedule
 
 
@@ -60,6 +65,8 @@ class CLIConfig:
     rolling_save_every: int = 0
     rolling_ttl_seconds: int = 7200
 
+    fireworks_base_model_name: str | None = None
+
 
 def get_dataset_builder(
     dataset: str,
@@ -82,6 +89,8 @@ def get_dataset_builder(
         return chat_datasets.Tulu3Builder(common_config=common_config)
     elif dataset == "no_robots":
         return chat_datasets.NoRobotsBuilder(common_config=common_config)
+    elif dataset == "open-researcher":
+        return chat_datasets.OpenResearcherBuilder(common_config=common_config)
     elif dataset.endswith(".jsonl"):
         # Load conversations from a JSONL file
         return FromConversationFileBuilder(
@@ -132,6 +141,7 @@ def cli_main(cli_config: CLIConfig):
     else:
         wandb_name = run_name
 
+
     cli_utils.check_log_dir(log_path, behavior_if_exists=cli_config.behavior_if_log_dir_exists)
     renderer_name = checkpoint_utils.resolve_renderer_name_from_checkpoint_or_default(
         model_name=cli_config.model_name,
@@ -171,6 +181,7 @@ def cli_main(cli_config: CLIConfig):
         max_steps=cli_config.max_steps,
         rolling_save_every=cli_config.rolling_save_every,
         rolling_ttl_seconds=cli_config.rolling_ttl_seconds,
+        fireworks_base_model_name=cli_config.fireworks_base_model_name,
     )
     asyncio.run(train.main(config))
 

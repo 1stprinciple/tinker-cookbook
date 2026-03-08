@@ -1,0 +1,60 @@
+# Fireworks-specific settings for on-policy distillation
+fireworks_base_url: "https://api.fireworks.ai"
+
+account: null  # Fireworks account ID (falls back to FIREWORKS_ACCOUNT_ID env var)
+
+# Student Model Configuration
+model:
+  name: accounts/fireworks/models/qwen3-4b-instruct-2507
+  lora_rank: 0
+
+# Teacher Model Configuration
+teacher:
+  name: accounts/fireworks/models/qwen3-32b
+  checkpoint_path: null  # Optional teacher checkpoint path
+
+# Training Configuration
+training:
+  group_size: ???  # Number of rollouts per prompt
+  learning_rate: 1e-5
+  beta1: 0.9
+  beta2: 0.999
+  eps: 1e-8
+  weight_decay: 0.01
+  grad_clip_norm: 1.0
+  max_length: null  # Auto-derived from training shape if null
+  kl_penalty_coef: 1.0
+  kl_discount_factor: 0.0
+
+deployment:
+  deployment_id: "qwen3-4b-instruct-2507-1775010173"
+  deployment_shape: null  # Auto-derived from training shape if null
+  deployment_region: null
+  deployment_accelerator_type: null
+  hot_load_bucket_type: FW_HOSTED
+  deployment_timeout_s: 5400
+  deployment_extra_args: null
+  tokenizer_model: Qwen/Qwen3-4B-Instruct-2507
+  sample_timeout: 600
+  disable_speculative_decoding: true
+  extra_values: null
+
+hotload:
+  hot_load_interval: 1
+  hot_load_timeout: 1200
+  hot_load_before_training: false
+  dcp_timeout: 2700
+
+training_infra:
+  training_shape_id: accounts/pyroworks/trainingShapes/qwen3-4b-instruct-2507-256k-b200
+  training_job_id: null
+  ref_training_shape_id: null
+  region: null
+  custom_image_tag: null
+  accelerator_type: null
+  accelerator_count: null
+  skip_validations: false
+  node_count: 1
+  extra_args: null
+
+display_name: "qwen3-4b-instruct-2507-distill-student"

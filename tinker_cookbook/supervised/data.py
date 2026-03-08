@@ -306,8 +306,12 @@ class FromConversationFileBuilder(ChatDatasetBuilder):
 
         # Define mapping function
         def map_fn(row: dict) -> tinker.Datum:
+            initial_messages = self.renderer.create_conversation_prefix_with_tools(
+                tools=row["tools"],
+                system_prompt=row["messages"][0]["content"],
+            )
             return conversation_to_datum(
-                row["messages"], self.renderer, self.common_config.max_length, train_on_what
+                initial_messages + row["messages"][1:], self.renderer, self.common_config.max_length, train_on_what
             )
 
         # Create supervised dataset

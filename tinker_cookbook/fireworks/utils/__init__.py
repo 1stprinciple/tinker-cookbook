@@ -1,0 +1,121 @@
+"""Cookbook utilities -- infrastructure, losses, data, logging, and more.
+
+RL-specific utilities (losses, training loop, PP recommendation,
+importance sampling, router replay) live in
+``tinker_cookbook.fireworks.utils.rl``.
+"""
+
+__all__ = [
+    "DEFAULT_ADAM",
+    "DeployConfig",
+    "EvalFn",
+    "WeightSyncConfig",
+    "InfraConfig",
+    "ReconnectableClient",
+    "ResourceCleanup",
+    "RewardFn",
+    "RLPromptDataset",
+    "RunnerConfig",
+    "RunnerIO",
+    "RunStatus",
+    "StepCallback",
+    "WandBConfig",
+    "compute_advantages",
+    "compute_pass_at_k",
+    "create_trainer_job",
+    "encode_text",
+    "extract_text",
+    "find_common_prefix_length",
+    "load_jsonl_dataset",
+    "load_preference_dataset",
+    "log_metrics_json",
+    "make_orpo_loss_fn",
+    "make_batch_orpo_loss_fn",
+    "make_batch_dpo_loss_fn",
+    "make_batch_sft_loss_fn",
+    "make_batch_weighted_sft_loss_fn",
+    "make_sft_loss_fn",
+    "RenderedSupervisedDatum",
+    "RenderedPreferencePair",
+    "build_next_token_datum",
+    "build_datum_from_token_mask",
+    "build_datum_from_tokens_and_weights",
+    "build_renderer",
+    "normalize_messages",
+    "parse_train_on_what",
+    "render_preference_pair",
+    "render_messages_to_datum",
+    "resolve_renderer_name",
+    "prepare_sampling_messages",
+    "setup_deployment",
+    "setup_training_client",
+    "setup_wandb",
+    "flush_timing",
+    "timed",
+    "timer",
+    "validate_config",
+    "validate_preflight",
+    "wandb_finish",
+    "wandb_log",
+]
+
+from tinker_cookbook.fireworks.utils.data import (
+    RLPromptDataset,
+    encode_text,
+    extract_text,
+    compute_advantages,
+    load_jsonl_dataset,
+    load_preference_dataset,
+    find_common_prefix_length,
+    prepare_sampling_messages,
+)
+from tinker_cookbook.fireworks.utils.infra import (
+    ResourceCleanup,
+    get_deployment_gpu_count,
+    setup_deployment,
+    create_trainer_job,
+    setup_training_client,
+)
+from tinker_cookbook.fireworks.utils.timer import timed, timer, flush_timing
+from tinker_cookbook.fireworks.utils.client import ReconnectableClient
+from tinker_cookbook.fireworks.utils.config import (
+    DEFAULT_ADAM,
+    EvalFn,
+    RewardFn,
+    ConcurrencyConfig,
+    InfraConfig,
+    WandBConfig,
+    DeployConfig,
+    StepCallback,
+    WeightSyncConfig,
+)
+from tinker_cookbook.fireworks.utils.losses import (
+    make_sft_loss_fn,
+    make_orpo_loss_fn,
+    make_batch_orpo_loss_fn,
+    make_batch_dpo_loss_fn,
+    make_batch_sft_loss_fn,
+    make_batch_weighted_sft_loss_fn,
+)
+from tinker_cookbook.fireworks.utils.supervised import (
+    RenderedPreferencePair,
+    RenderedSupervisedDatum,
+    build_datum_from_token_mask,
+    build_next_token_datum,
+    build_datum_from_tokens_and_weights,
+    build_renderer,
+    normalize_messages,
+    parse_train_on_what,
+    render_preference_pair,
+    render_messages_to_datum,
+    resolve_renderer_name,
+)
+from tinker_cookbook.fireworks.utils.logging import (
+    wandb_log,
+    setup_wandb,
+    wandb_finish,
+    log_metrics_json,
+    compute_pass_at_k,
+)
+from tinker_cookbook.fireworks.utils.runner import RunnerConfig, RunnerIO, RunStatus
+from tinker_cookbook.fireworks.utils.validation import validate_config, validate_preflight
