@@ -5,6 +5,7 @@ import os
 from typing import Any, Literal
 
 import tinker
+from fireworks.training.sdk import FiretitanServiceClient, FiretitanTrainingClient
 
 from tinker_cookbook import model_info
 from tinker_cookbook.utils.file_utils import read_jsonl
@@ -231,7 +232,7 @@ def get_last_checkpoint(log_dir: str, required_key: str = "state_path") -> dict[
 
 @scope
 async def save_checkpoint_async(
-    training_client: tinker.TrainingClient,
+    training_client: FiretitanTrainingClient,
     name: str,
     log_path: str,
     loop_state: dict[str, Any],
@@ -246,12 +247,14 @@ async def save_checkpoint_async(
     Returns:
         Path to the saved checkpoint
     """
+    state_name = f"{name}-state"
+    sampler_name = f"{name}-sampler"
     futures = {}
     if kind in ["state", "both"]:
-        futures["state"] = await training_client.save_state_async(name, ttl_seconds=ttl_seconds)
+        futures["state"] = await training_client.save_state_async(state_name, ttl_seconds=ttl_seconds)
     if kind in ["sampler", "both"]:
         futures["sampler"] = await training_client.save_weights_for_sampler_async(
-            name, ttl_seconds=ttl_seconds
+            sampler_name, ttl_seconds=ttl_seconds
         )
 
     results = {k: await v.result_async() for k, v in futures.items()}
@@ -267,7 +270,7 @@ async def save_checkpoint_async(
 
 @scope
 def save_checkpoint(
-    training_client: tinker.TrainingClient,
+    training_client: FiretitanTrainingClient,
     name: str,
     log_path: str,
     loop_state: dict[str, Any],

@@ -7,12 +7,16 @@ import asyncio
 from datetime import datetime
 
 import chz
+
 from tinker_cookbook import checkpoint_utils, cli_utils, renderers
 from tinker_cookbook.eval.evaluators import EvaluatorBuilder
 from tinker_cookbook.recipes.chat_sl import chat_datasets
 from tinker_cookbook.supervised import train
 from tinker_cookbook.supervised.data import FromConversationFileBuilder
-from tinker_cookbook.supervised.types import ChatDatasetBuilder, ChatDatasetBuilderCommonConfig
+from tinker_cookbook.supervised.types import (
+    ChatDatasetBuilder,
+    ChatDatasetBuilderCommonConfig,
+)
 from tinker_cookbook.utils.lr_scheduling import LRSchedule
 
 
@@ -33,7 +37,7 @@ class CLIConfig:
     lora_rank: int = 32
 
     # Infrastructure parameters
-    base_url: str | None = None
+    base_url: str = "http://localhost:8099"
 
     # Checkpointing and evaluation
     save_every: int = 20
@@ -75,6 +79,8 @@ def get_dataset_builder(
         return chat_datasets.Tulu3Builder(common_config=common_config)
     elif dataset == "no_robots":
         return chat_datasets.NoRobotsBuilder(common_config=common_config)
+    elif dataset == "open-researcher":
+        return chat_datasets.OpenResearcherBuilder(common_config=common_config)
     elif dataset.endswith(".jsonl"):
         # Load conversations from a JSONL file
         return FromConversationFileBuilder(
@@ -163,6 +169,10 @@ def cli_main(cli_config: CLIConfig):
         infrequent_eval_every=cli_config.infrequent_eval_every,
     )
     asyncio.run(train.main(config))
+
+
+if __name__ == "__main__":
+    chz.nested_entrypoint(cli_main)
 
 
 if __name__ == "__main__":
