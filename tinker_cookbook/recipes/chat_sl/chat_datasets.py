@@ -9,6 +9,7 @@ from typing import cast
 import chz
 import datasets
 import tinker
+
 from tinker_cookbook.renderers import TrainOnWhat
 from tinker_cookbook.supervised.data import (
     SupervisedDatasetFromHFDataset,
@@ -48,6 +49,30 @@ class Tulu3Builder(ChatDatasetBuilder):
             test_ds, batch_size=self.common_config.batch_size, map_fn=map_fn
         )
 
+@chz.chz
+class OpenResearcherBuilder(ChatDatasetBuilder):
+    def __call__(self) -> tuple[SupervisedDataset, SupervisedDataset]:
+        dataset = datasets.load_dataset("kylemontgomery/open-researcher-sft")
+        dataset = cast(datasets.DatasetDict, dataset)
+        dataset = dataset["train"]
+        dataset = dataset.shuffle(seed=0)
+        test_ds = dataset.take(1024)
+        train_ds = dataset.skip(1024)
+
+        # Use train_on_what from common_config if provided, otherwise default to LAST_ASSISTANT_MESSAGE
+        train_on_what = TrainOnWhat.LAST_ASSISTANT_MESSAGE
+
+        # take the last 1000 as test, the rest as train
+        def map_fn(row: dict) -> tinker.Datum:
+            return conversation_to_datum(
+                row["messages"], self.renderer, self.common_config.max_length, train_on_what
+            )
+
+        return SupervisedDatasetFromHFDataset(
+            train_ds, batch_size=self.common_config.batch_size, map_fn=map_fn
+        ), SupervisedDatasetFromHFDataset(
+            test_ds, batch_size=self.common_config.batch_size, map_fn=map_fn
+        )
 
 @chz.chz
 class NoRobotsBuilder(ChatDatasetBuilder):

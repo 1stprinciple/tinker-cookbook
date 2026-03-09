@@ -79,6 +79,8 @@ def get_dataset_builder(
         return chat_datasets.Tulu3Builder(common_config=common_config)
     elif dataset == "no_robots":
         return chat_datasets.NoRobotsBuilder(common_config=common_config)
+    elif dataset == "open-researcher":
+        return chat_datasets.OpenResearcherBuilder(common_config=common_config)
     elif dataset.endswith(".jsonl"):
         # Load conversations from a JSONL file
         return FromConversationFileBuilder(
