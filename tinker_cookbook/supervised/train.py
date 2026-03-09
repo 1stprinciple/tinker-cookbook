@@ -239,6 +239,7 @@ async def main(config: Config):
         lora_rank=config.lora_rank,
     )
     if resume_info:
+        logger.info(f"Loaded weights from {resume_info["state_path"]}")
         training_client.load_state_with_optimizer(resume_info["state_path"])
 
     dataset, maybe_test_dataset = config.dataset_builder()
