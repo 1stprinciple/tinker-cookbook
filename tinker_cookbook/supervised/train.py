@@ -238,6 +238,8 @@ async def main(config: Config):
         base_model=config.model_name,
         lora_rank=config.lora_rank,
     )
+    if resume_info:
+        training_client.load_state_with_optimizer(resume_info["state_path"])
 
     dataset, maybe_test_dataset = config.dataset_builder()
     n_batches = len(dataset)
