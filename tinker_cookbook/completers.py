@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from typing import TypeAlias
 
 import tinker
+from fireworks.training.sdk import DeploymentSampler
 
 from tinker_cookbook import renderers
 
@@ -71,6 +72,44 @@ class TinkerTokenCompleter(TokenCompleter):
             ),
         )
 
+        # Extract tokens and logprobs from the first (and only) sample
+        sampled_tokens = sample_result.sequences[0].tokens
+        sampled_logprobs = sample_result.sequences[0].logprobs
+        assert sampled_logprobs is not None
+
+        return TokensWithLogprobs(tokens=sampled_tokens, maybe_logprobs=sampled_logprobs)
+
+
+@dataclass
+class FireworksTokenCompleter(TokenCompleter):
+    """
+    TokenCompleter that uses a Fireworks DeploymentSampler (completions via sample_with_tokens).
+
+    Converts prompt token IDs to a single user message via the tokenizer, then calls
+    sampler.completions. Response token IDs and
+    logprobs come from the first SampledCompletion. The *stop* condition is not
+    passed through to the sampler in this implementation.
+    """
+
+    sampler: DeploymentSampler
+    n: int = 1
+    sample_kwargs: dict = dict(
+        max_tokens=2048,
+        temperature=1.0,
+        max_seq_len=2048,
+        http_timeout=30.0,
+    )
+
+    async def __call__(
+        self,
+        model_input: tinker.ModelInput,
+        stop: StopCondition,
+    ) -> TokensWithLogprobs:
+        sample_result = self.sampler.completions(
+            prompt=model_input.to_ints(),
+            n=self.n,
+            **self.sample_kwargs,
+        )
         # Extract tokens and logprobs from the first (and only) sample
         sampled_tokens = sample_result.sequences[0].tokens
         sampled_logprobs = sample_result.sequences[0].logprobs
