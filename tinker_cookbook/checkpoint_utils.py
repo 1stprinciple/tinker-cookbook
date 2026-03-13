@@ -246,16 +246,23 @@ async def save_checkpoint_async(
     Returns:
         Path to the saved checkpoint
     """
+    state_name = f"{name}-state"
+    sampler_name = f"{name}-sampler"
     futures = {}
     if kind in ["state", "both"]:
-        futures["state"] = await training_client.save_state_async(name, ttl_seconds=ttl_seconds)
+        futures["state"] = await training_client.save_state_async(state_name, ttl_seconds=ttl_seconds)
+    sampler_snapshot_name = None
     if kind in ["sampler", "both"]:
-        futures["sampler"] = await training_client.save_weights_for_sampler_async(
-            name, ttl_seconds=ttl_seconds
+        sampler_save_result = training_client.save_weights_for_sampler_ext(
+            sampler_name, checkpoint_type="base",
         )
+        sampler_snapshot_name = sampler_save_result.snapshot_name
+
 
     results = {k: await v.result_async() for k, v in futures.items()}
     paths = {k + "_path": v.path for k, v in results.items()}
+    if sampler_snapshot_name:
+        paths["sampler_path"] = sampler_snapshot_name
     update_scope_context(paths)
     logger.info(f"Saved checkpoints: {paths}")
     full_dict = {"name": name, **loop_state, **paths}

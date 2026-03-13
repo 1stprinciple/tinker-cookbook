@@ -5,7 +5,8 @@ from typing import Dict, List
 
 import numpy as np
 import tinker
-from tinker_cookbook.completers import TinkerTokenCompleter
+
+from tinker_cookbook.completers import FireworksTokenCompleter, TokenCompleter
 from tinker_cookbook.eval.evaluators import SamplingClientEvaluator
 from tinker_cookbook.rl.rollout_logging import (
     RolloutSummaryExportConfig,
@@ -13,9 +14,8 @@ from tinker_cookbook.rl.rollout_logging import (
 )
 from tinker_cookbook.rl.rollouts import do_group_rollout
 from tinker_cookbook.rl.types import EnvGroupBuilder, RLDataset, TrajectoryGroup
-from tinker_cookbook.utils.misc_utils import all_same, dict_mean
 from tinker_cookbook.utils import logtree
-from tinker_cookbook.completers import TokenCompleter
+from tinker_cookbook.utils.misc_utils import all_same, dict_mean
 
 
 def _compute_by_group_metrics(trajectory_groups_P: List[TrajectoryGroup], good_thresh: float = 0.5):
@@ -160,7 +160,7 @@ class RLTestSetEvaluator(SamplingClientEvaluator):
         *,
         rollout_summary_export: RolloutSummaryExportConfig | None = None,
     ) -> dict[str, float]:
-        policy = TinkerTokenCompleter(sampling_client, max_tokens=self.max_tokens)
+        policy = FireworksTokenCompleter(sampling_client)
         return await self.eval_token_completer(
             policy,
             rollout_summary_export=rollout_summary_export,

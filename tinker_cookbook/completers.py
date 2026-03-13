@@ -6,7 +6,7 @@ The TokenCompleter operates on tokens. This is the version used by RL algorithms
 Evals and other code should use the appropriate interface.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TypeAlias
 
 import tinker
@@ -79,7 +79,6 @@ class TinkerTokenCompleter(TokenCompleter):
 
         return TokensWithLogprobs(tokens=sampled_tokens, maybe_logprobs=sampled_logprobs)
 
-
 @dataclass
 class FireworksTokenCompleter(TokenCompleter):
     """
@@ -93,11 +92,14 @@ class FireworksTokenCompleter(TokenCompleter):
 
     sampler: DeploymentSampler
     n: int = 1
-    sample_kwargs: dict = dict(
-        max_tokens=2048,
-        temperature=1.0,
-        max_seq_len=2048,
-        http_timeout=30.0,
+    sample_kwargs: dict = field(
+        default_factory=lambda: dict(
+            max_tokens=4096,
+            temperature=1.0,
+            # max_seq_len=19200,
+            http_timeout=120.0,
+            logprobs=True,
+        )
     )
 
     async def __call__(
@@ -105,17 +107,20 @@ class FireworksTokenCompleter(TokenCompleter):
         model_input: tinker.ModelInput,
         stop: StopCondition,
     ) -> TokensWithLogprobs:
-        sample_result = self.sampler.completions(
+        sample_result = await self.sampler.async_completions(
             prompt=model_input.to_ints(),
             n=self.n,
             **self.sample_kwargs,
         )
         # Extract tokens and logprobs from the first (and only) sample
-        sampled_tokens = sample_result.sequences[0].tokens
-        sampled_logprobs = sample_result.sequences[0].logprobs
-        assert sampled_logprobs is not None
+        contents = sample_result['choices'][0]['logprobs']['content']
+        tokens = []
+        logprobs = []
+        for content in contents:
+            tokens.append(content['token_id'])
+            logprobs.append(content['logprob'])
 
-        return TokensWithLogprobs(tokens=sampled_tokens, maybe_logprobs=sampled_logprobs)
+        return TokensWithLogprobs(tokens=tokens, maybe_logprobs=logprobs)
 
 
 class TinkerMessageCompleter(MessageCompleter):
