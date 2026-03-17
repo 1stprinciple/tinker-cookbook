@@ -894,9 +894,17 @@ async def do_async_training(
             sampling_client_eval_step = sampling_client_step
             sampling_client_eval = sampling_client
             if cfg.eval_every > 0 and sampling_client_eval_step % cfg.eval_every == 0:
+                eval_semaphore = asyncio.Semaphore(8)
+
+                async def run_eval(evaluator: SamplingClientEvaluator) -> dict[str, Any]:
+                    async with eval_semaphore:
+                        return await evaluator(sampling_client_eval)
+
                 with timed("run_evals", metrics):
-                    for evaluator in evaluators:
-                        eval_metrics = await evaluator(sampling_client_eval)
+                    results = await asyncio.gather(
+                        *[run_eval(ev) for ev in evaluators]
+                    )
+                    for eval_metrics in results:
                         metrics.update({f"test/{k}": v for k, v in eval_metrics.items()})
                 metrics["time/evaluation_loop/total"] = time.time() - t_start
                 ml_logger.log_metrics(metrics, step=sampling_client_eval_step)
