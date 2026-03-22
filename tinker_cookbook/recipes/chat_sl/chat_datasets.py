@@ -60,8 +60,11 @@ class OpenResearcherBuilder(ChatDatasetBuilder):
         train_ds = dataset.skip(1024)
 
         # Use train_on_what from common_config if provided, otherwise default to LAST_ASSISTANT_MESSAGE
-        train_on_what = TrainOnWhat.LAST_ASSISTANT_MESSAGE
-
+        train_on_what = (
+            TrainOnWhat(self.common_config.train_on_what)
+            if self.common_config.train_on_what
+            else TrainOnWhat.ALL_ASSISTANT_MESSAGES
+        )
         # take the last 1000 as test, the rest as train
         def map_fn(row: dict) -> tinker.Datum:
             return conversation_to_datum(
