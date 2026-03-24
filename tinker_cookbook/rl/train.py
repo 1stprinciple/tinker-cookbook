@@ -33,6 +33,7 @@ from tinker_cookbook.eval.evaluators import (
     SamplingClientEvaluator,
     SamplingClientEvaluatorBuilder,
 )
+from tinker_cookbook.rl.custom import ppo_loss_fn
 from tinker_cookbook.rl.data_processing import (
     assemble_training_data,
     compute_advantages,
@@ -291,18 +292,17 @@ async def train_step(
     optim_result: tinker.OptimStepResponse | None = None
 
     # Enqueue first batch
-    fwd_bwd_future = await training_client.forward_backward_async(
-        [_remove_mask(d) for d in batches[0]], loss_fn=loss_fn, loss_fn_config=loss_fn_config
+    fwd_bwd_future = await training_client.forward_backward_custom_async(
+        [_remove_mask(d) for d in batches[0]], ppo_loss_fn,
     )
     optim_future = await training_client.optim_step_async(adam_params)
 
     for i in range(len(batches)):
         # Enqueue next batch before consuming current results (to stay on same clock cycle)
         if i + 1 < len(batches):
-            next_fwd_bwd_future = await training_client.forward_backward_async(
+            next_fwd_bwd_future = await training_client.forward_backward_custom_async(
                 [_remove_mask(d) for d in batches[i + 1]],
-                loss_fn=loss_fn,
-                loss_fn_config=loss_fn_config,
+                ppo_loss_fn,
             )
             next_optim_future = await training_client.optim_step_async(adam_params)
         else:
@@ -1150,10 +1150,9 @@ async def do_train_step_streaming_and_get_sampling_client(
             # Enqueue forward-backward (we'll await results after all minibatches are enqueued)
             with timed(f"train/fwd_bwd_substep_{i_substep}_mb_{i_minibatch}_enqueue", metrics):
                 forward_backward_futures.append(
-                    await training_client.forward_backward_async(
+                    await training_client.forward_backward_custom_async(
                         [_remove_mask(d) for d in data_D],
-                        loss_fn=cfg.loss_fn,
-                        loss_fn_config=cfg.loss_fn_config,
+                        ppo_loss_fn,
                     )
                 )
             all_data_D.extend(data_D)
