@@ -107,7 +107,7 @@ class FireworksTokenCompleter(TokenCompleter):
         model_input: tinker.ModelInput,
         stop: StopCondition,
     ) -> TokensWithLogprobs:
-        sample_result = await self.sampler.async_completions(
+        sample_result = await self.sampler.async_completions_stream(
             prompt=model_input.to_ints(),
             n=self.n,
             **self.sample_kwargs,
