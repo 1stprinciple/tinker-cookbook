@@ -33,7 +33,8 @@ from tinker_cookbook.eval.evaluators import (
     SamplingClientEvaluator,
     SamplingClientEvaluatorBuilder,
 )
-from tinker_cookbook.rl.custom import ppo_loss_fn
+
+# from tinker_cookbook.rl.custom import "grpo"
 from tinker_cookbook.rl.data_processing import (
     assemble_training_data,
     compute_advantages,
@@ -292,17 +293,17 @@ async def train_step(
     optim_result: tinker.OptimStepResponse | None = None
 
     # Enqueue first batch
-    fwd_bwd_future = await training_client.forward_backward_custom_async(
-        [_remove_mask(d) for d in batches[0]], ppo_loss_fn,
+    fwd_bwd_future = await training_client.forward_backward_async(
+        [_remove_mask(d) for d in batches[0]], "grpo",
     )
     optim_future = await training_client.optim_step_async(adam_params)
 
     for i in range(len(batches)):
         # Enqueue next batch before consuming current results (to stay on same clock cycle)
         if i + 1 < len(batches):
-            next_fwd_bwd_future = await training_client.forward_backward_custom_async(
+            next_fwd_bwd_future = await training_client.forward_backward_async(
                 [_remove_mask(d) for d in batches[i + 1]],
-                ppo_loss_fn,
+                "grpo",
             )
             next_optim_future = await training_client.optim_step_async(adam_params)
         else:
@@ -1150,9 +1151,9 @@ async def do_train_step_streaming_and_get_sampling_client(
             # Enqueue forward-backward (we'll await results after all minibatches are enqueued)
             with timed(f"train/fwd_bwd_substep_{i_substep}_mb_{i_minibatch}_enqueue", metrics):
                 forward_backward_futures.append(
-                    await training_client.forward_backward_custom_async(
+                    await training_client.forward_backward_async(
                         [_remove_mask(d) for d in data_D],
-                        ppo_loss_fn,
+                        "grpo",
                     )
                 )
             all_data_D.extend(data_D)
@@ -1465,4 +1466,5 @@ async def main(
 
     # Cleanup
     ml_logger.close()
+    logger.info("Training completed successfully")
     logger.info("Training completed successfully")
