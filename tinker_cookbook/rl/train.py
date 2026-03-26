@@ -34,7 +34,7 @@ from tinker_cookbook.eval.evaluators import (
     SamplingClientEvaluatorBuilder,
 )
 
-# from tinker_cookbook.rl.custom import "grpo"
+# from tinker_cookbook.rl.custom import "ppo"
 from tinker_cookbook.rl.data_processing import (
     assemble_training_data,
     compute_advantages,
@@ -294,7 +294,7 @@ async def train_step(
 
     # Enqueue first batch
     fwd_bwd_future = await training_client.forward_backward_async(
-        [_remove_mask(d) for d in batches[0]], "grpo",
+        [_remove_mask(d) for d in batches[0]], "ppo",
     )
     optim_future = await training_client.optim_step_async(adam_params)
 
@@ -303,7 +303,7 @@ async def train_step(
         if i + 1 < len(batches):
             next_fwd_bwd_future = await training_client.forward_backward_async(
                 [_remove_mask(d) for d in batches[i + 1]],
-                "grpo",
+                "ppo",
             )
             next_optim_future = await training_client.optim_step_async(adam_params)
         else:
@@ -1153,7 +1153,7 @@ async def do_train_step_streaming_and_get_sampling_client(
                 forward_backward_futures.append(
                     await training_client.forward_backward_async(
                         [_remove_mask(d) for d in data_D],
-                        "grpo",
+                        "ppo",
                     )
                 )
             all_data_D.extend(data_D)
