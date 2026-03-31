@@ -133,16 +133,18 @@ class FireworksTokenCompleter(TokenCompleter):
     """
 
     sampler: DeploymentSampler
+    max_tokens: int
     n: int = 1
-    sample_kwargs: dict = field(
-        default_factory=lambda: dict(
-            max_tokens=4096,
-            temperature=1.0,
-            # max_seq_len=19200,
-            http_timeout=120.0,
+    temperature: float = 1.0
+    http_timeout: float = 120.0
+
+    def sample_kwargs(self) -> dict:
+        return dict(
+            max_tokens=self.max_tokens,
+            temperature=self.temperature,
+            http_timeout=self.http_timeout,
             logprobs=True,
         )
-    )
 
     async def __call__(
         self,
@@ -152,7 +154,7 @@ class FireworksTokenCompleter(TokenCompleter):
         sample_result, _ = await self.sampler.async_completions_stream(
             prompt=model_input.to_ints(),
             n=self.n,
-            **self.sample_kwargs,
+            **self.sample_kwargs(),
         )
         # Extract tokens and logprobs from the first (and only) sample
         contents = sample_result['choices'][0]['logprobs']['content']

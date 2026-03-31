@@ -1322,7 +1322,7 @@ async def save_checkpoint_and_get_sampling_client(
                 kind="sampler",
                 ttl_seconds=ttl_seconds,
             )
-        success = weight_syncer.hotload(path_dict["sampler_path"], checkpoint_type="delta")
+        success = weight_syncer.hotload(path_dict["sampler_path"], checkpoint_type="base")
         if not success:
             raise ValueError(f"Failed to save and load checkpoint {path_dict["sampler_path"]}")
         return weight_syncer.get_deployment_sampler(), metrics

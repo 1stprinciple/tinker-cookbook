@@ -255,7 +255,7 @@ class RLTestSetEvaluator(SamplingClientEvaluator):
                 sampling_client, rollout_summary_export=rollout_summary_export
             )
 
-        policy = FireworksTokenCompleter(sampling_client)
+        policy = FireworksTokenCompleter(sampling_client, max_tokens=self.max_tokens)
         return await self.eval_token_completer(
             policy,
             rollout_summary_export=rollout_summary_export,

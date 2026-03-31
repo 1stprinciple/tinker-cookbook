@@ -434,7 +434,7 @@ async def _do_group_rollout_and_filter_constant_reward_impl(
     if strategy is None:
         strategy = FailFast()
 
-    policy = FireworksTokenCompleter(sampling_client)
+    policy = FireworksTokenCompleter(sampling_client, max_tokens=max_tokens, temperature=temperature)
 
     try:
         with logtree.optional_enable_logging(enable_logging):
