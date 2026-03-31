@@ -353,7 +353,7 @@ async def train_step(
 
     # Enqueue first batch
     fwd_bwd_future = await training_client.forward_backward_async(
-        [_remove_mask(d) for d in batches[0]], "ppo",
+        [_remove_mask(d) for d in batches[0]], loss_fn, loss_fn_config,
     )
     optim_future = await training_client.optim_step_async(adam_params)
 
@@ -362,7 +362,8 @@ async def train_step(
         if i + 1 < len(batches):
             next_fwd_bwd_future = await training_client.forward_backward_async(
                 [_remove_mask(d) for d in batches[i + 1]],
-                "ppo",
+                loss_fn,
+                loss_fn_config,
             )
             next_optim_future = await training_client.optim_step_async(adam_params)
         else:
@@ -2093,10 +2094,4 @@ async def main(
         rollout_executor.shutdown(wait=True)
         set_rollout_executor(None)
     ml_logger.close()
-    logger.info("Training completed successfully")
-    if rollout_executor is not None:
-        rollout_executor.shutdown(wait=True)
-        set_rollout_executor(None)
-    ml_logger.close()
-    logger.info("Training completed successfully")
     logger.info("Training completed successfully")

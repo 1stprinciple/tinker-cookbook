@@ -27,7 +27,7 @@ deployment:
   hot_load_bucket_type: FW_HOSTED  # Bucket type for hot-load snapshots
   deployment_timeout_s: 5400       # Timeout for deployment creation/readiness (90 min)
   deployment_extra_args: null      # Extra Helm args for the deployment
-  tokenizer_model: Qwen/Qwen3-4B
+  tokenizer_model: Qwen/Qwen3-4B-Instruct-2507
   sample_timeout: 600              # HTTP read timeout for sampling completions (10 min)
   disable_speculative_decoding: true  # Disable EAGLE speculation for hotload compatibility
   extra_values: null               # Extra Helm values dict (e.g. {"priorityClass": "deployment"})
