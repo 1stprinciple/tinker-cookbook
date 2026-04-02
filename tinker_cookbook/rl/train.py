@@ -701,16 +701,21 @@ async def do_sync_training_with_stream_minibatch(
             Defaults to None.
     """
     # Initial sampling client
-    sampling_client, _ = await save_checkpoint_and_get_sampling_client(
-        training_client,
-        weight_syncer,
-        start_batch,
-        config.log_path,
-        config.save_every,
-        start_batch,
-        config.ttl_seconds,
-        store=ml_logger.store,
-    )
+    if weight_syncer is not None and weight_syncer.base_identity is not None:
+        # Weights were already hotloaded during setup (e.g. Fireworks path),
+        # skip redundant save+hotload which can crash the deployment.
+        sampling_client = weight_syncer.get_deployment_sampler()
+    else:
+        sampling_client, _ = await save_checkpoint_and_get_sampling_client(
+            training_client,
+            weight_syncer,
+            start_batch,
+            config.log_path,
+            config.save_every,
+            start_batch,
+            config.ttl_seconds,
+            store=ml_logger.store,
+        )
 
     for i_batch in range(start_batch, end_batch):
         metrics: dict[str, Any] = {
@@ -1343,7 +1348,7 @@ async def save_checkpoint_and_get_sampling_client(
                 kind="sampler",
                 ttl_seconds=ttl_seconds,
             )
-        success = weight_syncer.hotload(path_dict["sampler_path"], checkpoint_type="base")
+        success = weight_syncer.hotload(path_dict["sampler_path"], checkpoint_type="delta")
         if not success:
             raise ValueError(f"Failed to save and load checkpoint {path_dict["sampler_path"]}")
         return weight_syncer.get_deployment_sampler(), metrics
@@ -1756,16 +1761,21 @@ async def do_sync_training(
             Defaults to None.
     """
     # Initial sampling client
-    sampling_client, _ = await save_checkpoint_and_get_sampling_client(
-        training_client,
-        weight_syncer,
-        start_batch,
-        config.log_path,
-        config.save_every,
-        start_batch,
-        config.ttl_seconds,
-        store=ml_logger.store,
-    )
+    if weight_syncer is not None and weight_syncer.base_identity is not None:
+        # Weights were already hotloaded during setup (e.g. Fireworks path),
+        # skip redundant save+hotload which can crash the deployment.
+        sampling_client = weight_syncer.get_deployment_sampler()
+    else:
+        sampling_client, _ = await save_checkpoint_and_get_sampling_client(
+            training_client,
+            weight_syncer,
+            start_batch,
+            config.log_path,
+            config.save_every,
+            start_batch,
+            config.ttl_seconds,
+            store=ml_logger.store,
+        )
 
     for i_batch in range(start_batch, end_batch):
         metrics: dict[str, Any] = {

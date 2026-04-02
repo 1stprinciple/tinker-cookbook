@@ -6,7 +6,7 @@ account: null  # Fireworks account ID (falls back to FIREWORKS_ACCOUNT_ID env va
 # Model Configuration
 model:
   name: accounts/fireworks/models/qwen3-4b-instruct-2507
-  lora_rank: 32         # LoRA rank 0 means no LoRA fine-tuning, which is compatible with Fireworks backend
+  lora_rank: 0         # LoRA rank 0 means no LoRA fine-tuning, which is compatible with Fireworks backend
 
 # Training Configuration (fireworks-specific)
 training:
@@ -20,7 +20,7 @@ training:
   max_length: null  # Auto-derived from training shape if null
 
 deployment:
-  deployment_id: ""
+  deployment_id: "qwen3-4b-instruct-2507-1775010173"
   deployment_shape: null  # Auto-derived from training shape if null
   deployment_region: null          # Region for deployment; falls back to training_infra.region
   deployment_accelerator_type: null  # Accelerator for deployment; falls back to training_infra.accelerator_type
@@ -34,12 +34,12 @@ deployment:
 
 hotload:
   hot_load_interval: 1             # Sync weights to deployment every N steps (0 = disabled)
-  hot_load_timeout: 600            # Timeout for hotload_and_wait (seconds)
+  hot_load_timeout: 1200            # Timeout for hotload_and_wait (seconds)
   hot_load_before_training: false  # Push initial weights to deployment before first step
   dcp_timeout: 2700                # Timeout for DCP save_state / load_state_with_optimizer (45 min)
 
 training_infra:
-  training_shape_id: accounts/pyroworks/trainingShapes/qwen3-4b-instruct-2507-256k-b200-lora
+  training_shape_id: accounts/pyroworks/trainingShapes/qwen3-4b-instruct-2507-256k-b200
   training_job_id: null                    # Job ID for the trainer job
   ref_training_shape_id: null      # Shape for reference trainer; falls back to training_shape_id
   region: null
