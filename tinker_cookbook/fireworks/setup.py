@@ -150,7 +150,6 @@ def init_fireworks_infra(cfg: DictConfig) -> tuple:
         deployment_id=deployment_id,
         base_model=cfg.model.name,
         hotload_timeout=cfg.hotload.hot_load_timeout,
-        dcp_timeout=cfg.hotload.get("dcp_timeout", 2700),
     )
 
     return policy_ep, reference_ep, sampling_client, weight_syncer

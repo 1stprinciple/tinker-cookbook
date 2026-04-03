@@ -547,7 +547,6 @@ class Config:
     fireworks_base_model_name: str | None = None
     fireworks_deployment_id: str | None = None
     fireworks_hot_load_timeout: int = 600
-    fireworks_dcp_timeout: int = 2700
 
 @trace.scope
 async def run_single_evaluation(
@@ -2016,7 +2015,6 @@ async def main(
         deployment_id=config.fireworks_deployment_id,
         base_model=config.fireworks_base_model_name,
         hotload_timeout=config.fireworks_hot_load_timeout,
-        dcp_timeout=config.fireworks_dcp_timeout,
     )
     if config.fireworks_deployment_id:
         name = f"resume-{start_batch}-base" if start_batch > 0 else "step-0-base"
