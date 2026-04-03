@@ -7,7 +7,7 @@ import logging
 from math import comb
 from typing import Any
 
-from training.utils.config import WandBConfig
+from tinker_cookbook.fireworks.utils.config import WandBConfig
 
 logger = logging.getLogger(__name__)
 

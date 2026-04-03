@@ -7,11 +7,10 @@ import asyncio
 import logging
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 import chz
 import tinker
-import torch
 from tinker.types import LossFnType
 
 from tinker_cookbook import checkpoint_utils, model_info
@@ -22,17 +21,21 @@ from tinker_cookbook.distillation.datasets import (
 )
 from tinker_cookbook.eval.evaluators import SamplingClientEvaluator, SamplingClientEvaluatorBuilder
 from tinker_cookbook.exceptions import ConfigurationError
+from tinker_cookbook.fireworks.distillation_runtime import (
+    FireworksDistillationRuntime,
+    build_fireworks_distillation_runtime,
+    get_initial_sampling_client,
+    incorporate_teacher_kl_penalty,
+    refresh_sampling_client_after_train_step,
+    train_step_with_fireworks_client,
+)
 from tinker_cookbook.rl.data_processing import (
     assemble_training_data,
     compute_advantages,
 )
 from tinker_cookbook.rl.metric_util import RLTestSetEvaluator, compute_trajectory_metrics
-from tinker_cookbook.rl.metrics import discounted_future_sum_vectorized
 from tinker_cookbook.rl.train import (
-    compute_full_batch_metrics_and_get_sampling_client,
     do_group_rollout_and_filter_constant_reward,
-    save_checkpoint_and_get_sampling_client,
-    train_step,
 )
 from tinker_cookbook.rl.types import (
     EnvGroupBuilder,
@@ -41,7 +44,7 @@ from tinker_cookbook.rl.types import (
 from tinker_cookbook.tokenizer_utils import Tokenizer
 from tinker_cookbook.utils import ml_log, trace
 from tinker_cookbook.utils.deprecation import warn_deprecated
-from tinker_cookbook.utils.misc_utils import iteration_dir, safezip
+from tinker_cookbook.utils.misc_utils import iteration_dir
 
 logger = logging.getLogger(__name__)
 
@@ -49,81 +52,18 @@ logger = logging.getLogger(__name__)
 @trace.scope
 async def incorporate_kl_penalty(
     data_D: list[tinker.Datum],
-    teacher_clients_D: list[tinker.SamplingClient],
+    teacher_clients_D: list[Any],
     dataset_indices_D: list[int],
     kl_penalty_coef: float,
     kl_discount_factor: float,
 ) -> dict[str, float]:
-    """
-    Compute reverse KL between the student (log p) and the teacher model (log q), computed as
-    log p - log q. We then adjust the advantages in-place as the negative reverse KL.
-
-    Args:
-        data_D: List of datums to compute KL for
-        teacher_clients_D: List of teacher sampling clients, one per datum
-        dataset_indices_D: List of dataset indices, one per datum
-        kl_penalty_coef: Coefficient for KL penalty
-        kl_discount_factor: Discount factor for future KL
-    """
-    # Note: if your teacher has a different renderer than the student, you may want to modify
-    #       the full_sequence_inputs_D to match the teacher's renderer.
-    full_sequence_inputs_D = [
-        datum.model_input.append_int(cast(int, datum.loss_fn_inputs["target_tokens"].data[-1]))
-        for datum in data_D
-    ]
-    # Compute the teacher's logprobs for each element of the batch
-    # Each datum uses its corresponding teacher sampling client
-    teacher_logprobs_D = await asyncio.gather(
-        *[
-            teacher_client.compute_logprobs_async(sequence_input)
-            for teacher_client, sequence_input in zip(teacher_clients_D, full_sequence_inputs_D)
-        ]
+    return await incorporate_teacher_kl_penalty(
+        data_D,
+        teacher_clients_D,
+        dataset_indices_D,
+        kl_penalty_coef,
+        kl_discount_factor,
     )
-    # The reverse KL is computed as KL[p||q] = log p - log q, where
-    #   - p: sampled_logprobs
-    #   - q: teacher_logprobs
-    sampled_logprobs_D = [datum.loss_fn_inputs["logprobs"].to_torch() for datum in data_D]
-    float_masks = [datum.loss_fn_inputs["mask"].to_torch().float() for datum in data_D]
-    reverse_kl = [
-        (sampled_logprobs - torch.tensor(teacher_logprobs[1:])) * mask
-        for teacher_logprobs, sampled_logprobs, mask in safezip(
-            teacher_logprobs_D, sampled_logprobs_D, float_masks
-        )
-    ]
-    # Track per-dataset KL for logging
-    # dataset_idx -> (sum of KL, sum of mask)
-    per_dataset_kl: dict[int, tuple[float, float]] = {}
-
-    for i, datum in enumerate(data_D):
-        # The advantage is the negative reverse KL. We can optionally apply a discount factor.
-        kl_advantages = -kl_penalty_coef * float_masks[i] * reverse_kl[i]
-        if kl_discount_factor > 0:
-            kl_advantages = discounted_future_sum_vectorized(kl_advantages, kl_discount_factor)
-        datum.loss_fn_inputs["advantages"] = tinker.TensorData.from_torch(
-            datum.loss_fn_inputs["advantages"].to_torch() + kl_advantages
-        )
-
-        # Accumulate per-dataset KL
-        dataset_idx = dataset_indices_D[i]
-        kl_sum = reverse_kl[i].sum().item()
-        mask_sum = float_masks[i].sum().item()
-        if dataset_idx not in per_dataset_kl:
-            per_dataset_kl[dataset_idx] = (0.0, 0.0)
-        prev_kl_sum, prev_mask_sum = per_dataset_kl[dataset_idx]
-        per_dataset_kl[dataset_idx] = (prev_kl_sum + kl_sum, prev_mask_sum + mask_sum)
-
-    # Compute average reverse KL over the batch for logging purposes
-    avg_logp_diff = sum([diff.sum() for diff in reverse_kl]) / sum(
-        [mask.sum() for mask in float_masks]
-    )
-
-    # Compute per-dataset metrics
-    metrics = {"teacher_kl": float(avg_logp_diff)}
-    for dataset_idx, (kl_sum, mask_sum) in per_dataset_kl.items():
-        if mask_sum > 0:
-            metrics[f"teacher_kl/dataset_{dataset_idx}"] = float(kl_sum / mask_sum)
-
-    return metrics
 
 
 @chz.chz
@@ -167,6 +107,11 @@ class Config:
     # Deprecated alias for max_steps. Use max_steps instead.
     max_step: int | None = None
 
+    fireworks_base_model_name: str | None = None
+    fireworks_deployment_id: str | None = None
+    fireworks_hot_load_timeout: int = 600
+    fireworks_dcp_timeout: int = 2700
+
 
 @trace.scope
 async def prepare_minibatch(
@@ -174,11 +119,16 @@ async def prepare_minibatch(
     trajectory_groups_P: list[TrajectoryGroup],
     tokenizer: Tokenizer,
     dataset_indices_P: list[int],
-    teacher_clients: list[tinker.SamplingClient],
+    teacher_clients: list[Any],
     kl_penalty_coef: float,
     kl_discount_factor: float,
 ) -> tuple[list[tinker.Datum], dict[str, Any]]:
     """Converts the trajectories into a minibatch, and provides metrics about the minibatch"""
+    logger.info(
+        "Preparing minibatch: groups=%d trajectory_groups=%d",
+        len(env_group_builders_P),
+        len(trajectory_groups_P),
+    )
 
     # Compute trajectory metrics
     metrics = {}
@@ -189,6 +139,7 @@ async def prepare_minibatch(
     async with trace.scope_span("assemble_training_data"):
         advantages_P = compute_advantages(trajectory_groups_P)
         data_D, metadata_D = assemble_training_data(trajectory_groups_P, advantages_P)
+    logger.info("Prepared training data: datums=%d", len(data_D))
 
     # Print one datum per dataset
     printed_datasets = set()
@@ -200,6 +151,7 @@ async def prepare_minibatch(
 
     # Incorporate KL penalty if configured
     if kl_penalty_coef > 0:
+        logger.info("Starting teacher KL penalty computation: datums=%d", len(data_D))
         async with trace.scope_span("compute_kl_penalty"):
             # Map each datum to its teacher sampling client and dataset index using metadata
             #   - metadata_D contains group_idx which indexes into trajectory_groups_P
@@ -218,6 +170,7 @@ async def prepare_minibatch(
                 kl_penalty_coef,
                 kl_discount_factor,
             )
+        logger.info("Completed teacher KL penalty computation")
         metrics.update(kl_penalty_metrics)
 
     return data_D, metrics
@@ -227,15 +180,14 @@ async def prepare_minibatch(
 async def do_train_step_and_get_sampling_client(
     config: Config,
     i_batch: int,
-    training_client: tinker.TrainingClient,
-    service_client: tinker.ServiceClient,
+    fireworks_runtime: FireworksDistillationRuntime,
     tokenizer: Tokenizer,
     env_group_builders_P: Sequence[EnvGroupBuilder],
     trajectory_groups_P: list[TrajectoryGroup],
     dataset_indices_P: list[int],
-    teacher_clients: list[tinker.SamplingClient],
 ) -> tuple[tinker.SamplingClient, dict[str, Any]]:
     trace.update_scope_context({"step": i_batch})
+    logger.info("Starting train step for batch %d", i_batch)
 
     metrics = {}
     data_D, prepare_minibatch_metrics = await prepare_minibatch(
@@ -243,34 +195,42 @@ async def do_train_step_and_get_sampling_client(
         trajectory_groups_P,
         tokenizer,
         dataset_indices_P,
-        teacher_clients,
+        fireworks_runtime.teacher_clients,
         kl_penalty_coef=config.kl_penalty_coef,
         kl_discount_factor=config.kl_discount_factor,
     )
     metrics.update(prepare_minibatch_metrics)
 
     async with trace.scope_span("train"):
-        training_logprobs_D = await train_step(
+        logger.info("Submitting trainer forward/backward for batch %d", i_batch)
+        training_logprobs_D = await train_step_with_fireworks_client(
             data_D=data_D,
-            training_client=training_client,
+            training_client=fireworks_runtime.training_client,
             learning_rate=config.learning_rate,
             num_substeps=config.num_substeps,
             loss_fn=config.loss_fn,
             loss_fn_config=config.loss_fn_config,
             metrics=metrics,
         )
+    logger.info(
+        "Trainer forward/backward completed for batch %d with %d logprob tensors",
+        i_batch,
+        len(training_logprobs_D),
+    )
 
-    sampling_client, full_batch_metrics = await compute_full_batch_metrics_and_get_sampling_client(
-        training_client,
+    logger.info("Refreshing sampling client after batch %d", i_batch)
+    sampling_client, full_batch_metrics = await refresh_sampling_client_after_train_step(
+        fireworks_runtime,
         # NOTE: saving the checkpoint as the i + 1 step
-        i_batch + 1,
-        data_D,
-        training_logprobs_D,
-        config.log_path,
-        config.save_every,
-        config.compute_post_kl,
+        i_batch=i_batch + 1,
+        data_D=data_D,
+        training_logprobs_D=training_logprobs_D,
+        log_path=config.log_path,
+        save_every=config.save_every,
+        compute_post_kl=config.compute_post_kl,
     )
     metrics.update(full_batch_metrics)
+    logger.info("Completed train step for batch %d", i_batch)
 
     return sampling_client, metrics
 
@@ -281,19 +241,20 @@ async def do_sync_training(
     end_batch: int,
     num_batches: int,
     config: Config,
-    training_client: tinker.TrainingClient,
-    service_client: tinker.ServiceClient,
+    fireworks_runtime: FireworksDistillationRuntime,
     evaluators: list[SamplingClientEvaluator],
     dataset: CompositeDataset,
-    teacher_clients: list[tinker.SamplingClient],
     ml_logger: ml_log.Logger,
     tokenizer: Tokenizer,
 ):
     """Implements fully synchronous on-policy training"""
 
     # Initial sampling client
-    sampling_client, _ = await save_checkpoint_and_get_sampling_client(
-        training_client, start_batch, config.log_path, config.save_every
+    sampling_client, _ = await get_initial_sampling_client(
+        fireworks_runtime,
+        start_batch=start_batch,
+        log_path=config.log_path,
+        save_every=config.save_every,
     )
 
     log_path = Path(config.log_path)
@@ -316,6 +277,11 @@ async def do_sync_training(
             # Get batch and sample trajectories
             env_group_builders_P, dataset_indices_P = dataset.get_batch(i_batch)
             async with trace.scope_span("sample"):
+                logger.info(
+                    "Starting rollout sampling for batch %d with %d env groups",
+                    i_batch,
+                    len(env_group_builders_P),
+                )
                 trajectory_groups_P = await asyncio.gather(
                     *[
                         asyncio.create_task(
@@ -331,23 +297,27 @@ async def do_sync_training(
                         for i, builder in enumerate(env_group_builders_P)
                     ],
                 )
+            logger.info("Completed rollout sampling for batch %d", i_batch)
             trajectory_groups_P = [
                 trajectory_group
                 for trajectory_group in trajectory_groups_P
                 if trajectory_group is not None
             ]
+            logger.info(
+                "Retained %d trajectory groups after filtering for batch %d",
+                len(trajectory_groups_P),
+                i_batch,
+            )
 
             # Train step
             sampling_client, train_step_metrics = await do_train_step_and_get_sampling_client(
                 config,
                 i_batch,
-                training_client,
-                service_client,
+                fireworks_runtime,
                 tokenizer,
                 env_group_builders_P,
                 trajectory_groups_P,
                 dataset_indices_P,
-                teacher_clients,
             )
 
             metrics.update(train_step_metrics)
@@ -405,44 +375,34 @@ async def main(
     else:
         start_batch = 0
 
-    service_client = tinker.ServiceClient(base_url=config.base_url)
     user_metadata: dict[str, str] = {}
     if wandb_link := ml_logger.get_logger_url():
         user_metadata["wandb_link"] = wandb_link
     checkpoint_utils.add_renderer_name_to_user_metadata(user_metadata, config.renderer_name)
     model_info.warn_if_renderer_not_recommended(config.model_name, config.renderer_name)
 
-    if resume_info:
-        # Resuming interrupted training - load optimizer state for proper continuation
-        await checkpoint_utils.check_renderer_name_for_checkpoint_async(
-            service_client, resume_info.state_path, config.renderer_name
-        )
-        training_client = (
-            await service_client.create_training_client_from_state_with_optimizer_async(
-                resume_info.state_path, user_metadata=user_metadata
-            )
-        )
-        logger.info(f"Resumed training from {resume_info.state_path}")
-    elif config.load_checkpoint_path:
-        # Starting fresh from a checkpoint - load weights only (fresh optimizer)
-        await checkpoint_utils.check_renderer_name_for_checkpoint_async(
-            service_client, config.load_checkpoint_path, config.renderer_name
-        )
-        training_client = await service_client.create_training_client_from_state_async(
-            config.load_checkpoint_path, user_metadata=user_metadata
-        )
-        logger.info(f"Loaded weights from {config.load_checkpoint_path}")
-    else:
-        training_client = await service_client.create_lora_training_client_async(
-            config.model_name, rank=config.lora_rank, user_metadata=user_metadata
-        )
+    fireworks_runtime = await build_fireworks_distillation_runtime(
+        base_url=config.base_url,
+        model_name=config.model_name,
+        lora_rank=config.lora_rank,
+        renderer_name=config.renderer_name,
+        load_checkpoint_path=config.load_checkpoint_path,
+        dataset_configs=config.dataset_configs,
+        start_batch=start_batch,
+        resume_state_path=resume_info.state_path if resume_info else None,
+        user_metadata=user_metadata,
+        fireworks_base_model_name=config.fireworks_base_model_name,
+        fireworks_deployment_id=config.fireworks_deployment_id,
+        fireworks_hot_load_timeout=config.fireworks_hot_load_timeout,
+        fireworks_dcp_timeout=config.fireworks_dcp_timeout,
+    )
 
-    # Get tokenizer from training client
-    tokenizer = training_client.get_tokenizer()
+    # Fireworks model ids are not always valid Hugging Face tokenizer ids,
+    # so the runtime resolves an explicit tokenizer model when needed.
+    tokenizer = fireworks_runtime.tokenizer
 
-    # Create datasets and teacher sampling clients from configs
+    # Create datasets and teacher clients from configs
     datasets = []
-    teacher_clients = []
     groups_per_batch_list = []
     evaluators = [evaluator() for evaluator in config.evaluator_builders]
 
@@ -455,21 +415,6 @@ async def main(
         # Add test dataset evaluator if present
         if maybe_test_dataset is not None:
             evaluators.append(RLTestSetEvaluator(maybe_test_dataset, max_tokens=config.max_tokens))
-
-        # Create teacher sampling client
-        teacher_config = dataset_config.teacher_config
-        teacher_client = service_client.create_sampling_client(base_model=teacher_config.base_model)
-        # Load teacher checkpoint if specified
-        if teacher_config.load_checkpoint_path is not None:
-            teacher_client = service_client.create_sampling_client(
-                base_model=teacher_config.base_model,
-                model_path=teacher_config.load_checkpoint_path,
-            )
-        teacher_clients.append(teacher_client)
-        logger.info(
-            f"Created teacher sampling client for {teacher_config.base_model} "
-            f"(checkpoint: {teacher_config.load_checkpoint_path})"
-        )
 
     # Wrap datasets in CompositeDataset
     composite_dataset = CompositeDataset(datasets, groups_per_batch_list)
@@ -492,11 +437,9 @@ async def main(
         end_batch=num_batches,
         num_batches=num_batches,
         config=config,
-        training_client=training_client,
-        service_client=service_client,
+        fireworks_runtime=fireworks_runtime,
         evaluators=evaluators,
         dataset=composite_dataset,
-        teacher_clients=teacher_clients,
         ml_logger=ml_logger,
         tokenizer=tokenizer,
     )
@@ -504,7 +447,7 @@ async def main(
     # Save final checkpoint
     if start_batch < num_batches:
         _ = await checkpoint_utils.save_checkpoint_async(
-            training_client=training_client,
+            training_client=fireworks_runtime.training_client,
             name="final",
             log_path=config.log_path,
             kind="both",

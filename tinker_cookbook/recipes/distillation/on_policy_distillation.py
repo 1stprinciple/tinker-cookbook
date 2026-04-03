@@ -41,6 +41,7 @@ from tinker_cookbook.distillation.datasets import (
     PromptOnlyDatasetBuilder,
     TeacherConfig,
 )
+from tinker_cookbook.fireworks.distillation_runtime import resolve_fireworks_tokenizer_model_name
 
 logger = logging.getLogger(__name__)
 
@@ -91,6 +92,10 @@ class CLIConfig:
 
     # Service configuration
     base_url: str | None = None
+    fireworks_base_model_name: str | None = None
+    fireworks_deployment_id: str | None = None
+    fireworks_hot_load_timeout: int = 600
+    fireworks_dcp_timeout: int = 2700
 
     behavior_if_log_dir_exists: cli_utils.LogdirBehavior = "ask"
 
@@ -100,9 +105,15 @@ class CLIConfig:
 async def cli_main(cli_config: CLIConfig):
     """Convert CLI config to full config and run training."""
 
+    tokenizer_model_name = cli_config.model_name
+    if cli_config.fireworks_base_model_name is not None:
+        tokenizer_model_name = resolve_fireworks_tokenizer_model_name(
+            cli_config.fireworks_base_model_name
+        )
+
     # Get renderer name
     renderer_name = await checkpoint_utils.resolve_renderer_name_from_checkpoint_or_default_async(
-        model_name=cli_config.model_name,
+        model_name=tokenizer_model_name,
         explicit_renderer_name=cli_config.renderer_name,
         load_checkpoint_path=cli_config.load_checkpoint_path,
         base_url=cli_config.base_url,
@@ -131,7 +142,7 @@ async def cli_main(cli_config: CLIConfig):
         dataset_name=cli_config.dataset,
         groups_per_batch=cli_config.groups_per_batch,
         group_size=cli_config.group_size,
-        model_name_for_tokenizer=cli_config.model_name,
+        model_name_for_tokenizer=tokenizer_model_name,
         renderer_name=renderer_name,
     )
 
@@ -170,6 +181,10 @@ async def cli_main(cli_config: CLIConfig):
         eval_every=cli_config.eval_every,
         save_every=cli_config.save_every,
         max_steps=cli_config.max_steps,
+        fireworks_base_model_name=cli_config.fireworks_base_model_name,
+        fireworks_deployment_id=cli_config.fireworks_deployment_id,
+        fireworks_hot_load_timeout=cli_config.fireworks_hot_load_timeout,
+        fireworks_dcp_timeout=cli_config.fireworks_dcp_timeout,
     )
 
     cli_utils.check_log_dir(log_path, behavior_if_exists=cli_config.behavior_if_log_dir_exists)
