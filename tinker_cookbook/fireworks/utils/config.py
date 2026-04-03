@@ -145,7 +145,6 @@ class WeightSyncConfig:
 
     weight_sync_interval: int = 1
     dcp_save_interval: int = 0
-    dcp_timeout: int = 2700
     """Timeout in seconds for DCP save_state / load_state_with_optimizer (default 45 min)."""
     first_checkpoint_type: str = "base"
     weight_sync_before_training: bool = True
