@@ -352,27 +352,43 @@ async def train_step(
     optim_result: tinker.OptimStepResponse | None = None
 
     # Enqueue first batch
+    logger.info("[train_step] enqueue first forward_backward: batch_size=%d", len(batches[0]))
     fwd_bwd_future = await training_client.forward_backward_async(
         [_remove_mask(d) for d in batches[0]], loss_fn, loss_fn_config,
     )
+    logger.info("[train_step] first forward_backward enqueued")
+    logger.info("[train_step] enqueue first optim_step")
     optim_future = await training_client.optim_step_async(adam_params)
+    logger.info("[train_step] first optim_step enqueued")
 
     for i in range(len(batches)):
         # Enqueue next batch before consuming current results (to stay on same clock cycle)
         if i + 1 < len(batches):
+            logger.info(
+                "[train_step] enqueue next forward_backward: step=%d batch_size=%d",
+                i + 1,
+                len(batches[i + 1]),
+            )
             next_fwd_bwd_future = await training_client.forward_backward_async(
                 [_remove_mask(d) for d in batches[i + 1]],
                 loss_fn,
                 loss_fn_config,
             )
+            logger.info("[train_step] next forward_backward enqueued: step=%d", i + 1)
+            logger.info("[train_step] enqueue next optim_step: step=%d", i + 1)
             next_optim_future = await training_client.optim_step_async(adam_params)
+            logger.info("[train_step] next optim_step enqueued: step=%d", i + 1)
         else:
             next_fwd_bwd_future = None
             next_optim_future = None
         # Consume current results
+        logger.info("[train_step] waiting for forward_backward result: step=%d", i)
         fwd_bwd_result = await fwd_bwd_future.result_async()
+        logger.info("[train_step] received forward_backward result: step=%d", i)
         training_logprobs_D.extend(_training_logprobs_from_fwd_bwd(fwd_bwd_result))
+        logger.info("[train_step] waiting for optim_step result: step=%d", i)
         optim_result = await optim_future.result_async()
+        logger.info("[train_step] received optim_step result: step=%d", i)
         # Move to next iteration
         if next_fwd_bwd_future is not None and next_optim_future is not None:
             fwd_bwd_future = next_fwd_bwd_future
@@ -2005,7 +2021,6 @@ async def main(
         deployment_id=config.fireworks_deployment_id,
         base_model=config.fireworks_base_model_name,
         hotload_timeout=config.fireworks_hot_load_timeout,
-        dcp_timeout=config.fireworks_dcp_timeout,
     )
     if config.fireworks_deployment_id:
         name = f"resume-{start_batch}-base" if start_batch > 0 else "step-0-base"

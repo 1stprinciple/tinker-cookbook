@@ -19,7 +19,8 @@ from fireworks.training.sdk.trainer import (
 from fireworks.training.sdk import TrainingShapeProfile
 
 from fireworks.training.sdk.deployment import DeploymentConfig, DeploymentInfo, DeploymentManager
-from training.utils.config import InfraConfig, DeployConfig
+
+from tinker_cookbook.fireworks.utils.config import DeployConfig, InfraConfig
 
 logger = logging.getLogger(__name__)
 

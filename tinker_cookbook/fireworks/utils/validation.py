@@ -10,7 +10,7 @@ import logging
 
 from fireworks.training.sdk.errors import format_sdk_error, DOCS_SDK
 from fireworks.training.sdk import validate_output_model_id
-from training.utils.config import DeployConfig, WeightSyncConfig
+from tinker_cookbook.fireworks.utils.config import DeployConfig, WeightSyncConfig
 
 logger = logging.getLogger(__name__)
 
