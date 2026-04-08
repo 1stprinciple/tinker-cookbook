@@ -65,6 +65,8 @@ class CLIConfig:
     rolling_save_every: int = 0
     rolling_ttl_seconds: int = 7200
 
+    fireworks_base_model_name: str | None = None
+
 
 def get_dataset_builder(
     dataset: str,
@@ -179,6 +181,7 @@ def cli_main(cli_config: CLIConfig):
         max_steps=cli_config.max_steps,
         rolling_save_every=cli_config.rolling_save_every,
         rolling_ttl_seconds=cli_config.rolling_ttl_seconds,
+        fireworks_base_model_name=cli_config.fireworks_base_model_name,
     )
     asyncio.run(train.main(config))
 

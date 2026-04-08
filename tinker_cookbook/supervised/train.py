@@ -10,6 +10,7 @@ refer to `tinker_cookbook/recipes/sl_loop.py`.
 import asyncio
 import json
 import logging
+import os
 import time
 from collections import deque
 from dataclasses import dataclass
@@ -34,7 +35,10 @@ from tinker_cookbook.supervised.nll_evaluator import NLLEvaluator
 from tinker_cookbook.supervised.types import SupervisedDatasetBuilder
 from tinker_cookbook.tokenizer_utils import get_tokenizer
 from tinker_cookbook.utils import ml_log, trace
-from tinker_cookbook.utils.lr_scheduling import LRSchedule, compute_schedule_lr_multiplier
+from tinker_cookbook.utils.lr_scheduling import (
+    LRSchedule,
+    compute_schedule_lr_multiplier,
+)
 from tinker_cookbook.utils.misc_utils import iteration_dir
 
 logger = logging.getLogger(__name__)
@@ -155,6 +159,7 @@ class Config:
     # 0 = no pipelining, 2+ = deeper pipeline.
     submit_ahead: int = 1
 
+    fireworks_base_model_name: str | None = None
 
 @dataclass
 class SubmittedBatch:
@@ -302,7 +307,7 @@ async def main(config: Config):
 
     service_client = FiretitanServiceClient(
         base_url=config.base_url,
-        api_key="tml-local",
+        api_key=os.environ["FIREWORKS_API_KEY"],
     )
 
     user_metadata: dict[str, str] = {}
@@ -334,7 +339,7 @@ async def main(config: Config):
     #     logger.info(f"Loaded weights from {config.load_checkpoint_path}")
     # else:
     training_client = service_client.create_training_client(
-        base_model=config.model_name,
+        base_model=config.fireworks_base_model_name,
         lora_rank=config.lora_rank,
     )
     if resume_info:
@@ -616,6 +621,10 @@ async def main(config: Config):
 
 
 if __name__ == "__main__":
+    chz.nested_entrypoint(lambda config: asyncio.run(main(config)), allow_hyphens=True)
+
+if __name__ == "__main__":
+    chz.nested_entrypoint(lambda config: asyncio.run(main(config)), allow_hyphens=True)
     chz.nested_entrypoint(lambda config: asyncio.run(main(config)), allow_hyphens=True)
 
 if __name__ == "__main__":
