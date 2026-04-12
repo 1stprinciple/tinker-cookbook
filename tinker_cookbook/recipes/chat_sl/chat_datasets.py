@@ -52,7 +52,7 @@ class Tulu3Builder(ChatDatasetBuilder):
 @chz.chz
 class OpenResearcherBuilder(ChatDatasetBuilder):
     def __call__(self) -> tuple[SupervisedDataset, SupervisedDataset]:
-        dataset = datasets.load_dataset("kylemontgomery/deep-research-sft-0406")
+        dataset = datasets.load_dataset("1stprinciple/deep-research-sft-qwen35")
         dataset = cast(datasets.DatasetDict, dataset)
         dataset = dataset["train"]
         dataset = dataset.shuffle(seed=0)
