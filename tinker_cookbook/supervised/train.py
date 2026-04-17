@@ -186,7 +186,7 @@ class SubmittedBatch:
             evaluation metrics, or ``None``.
     """
 
-    fwd_future: APIFuture[tinker.ForwardBackwardOutput]
+    # fwd_future: APIFuture[tinker.ForwardBackwardOutput]
     fwd_bwd_future: APIFuture[tinker.ForwardBackwardOutput]
     optim_step_future: APIFuture[tinker.OptimStepResponse]
     metrics: dict[str, int | float | str]
@@ -442,14 +442,14 @@ async def main(config: Config):
                     infrequent_evaluators, training_client, step
                 )
 
-        fwd_future = await training_client.forward_async(data, "cross_entropy")
+        # fwd_future = await training_client.forward_async(data, "cross_entropy")
         fwd_bwd_future = await training_client.forward_backward_async(
             data, "cross_entropy"
         )
         optim_step_future = await training_client.optim_step_async(adam_params)
 
         return SubmittedBatch(
-            fwd_future=fwd_future,
+            # fwd_future=fwd_future,
             fwd_bwd_future=fwd_bwd_future,
             optim_step_future=optim_step_future,
             metrics=metrics,
@@ -499,25 +499,25 @@ async def main(config: Config):
         if fwd_bwd_result.metrics:
             metrics.update(fwd_bwd_result.metrics)
 
-        logprobs_td = [output["logprobs"] for output in fwd_result.loss_fn_outputs]
+        # logprobs_td = [output["logprobs"] for output in fwd_result.loss_fn_outputs]
         weights_td = [datum.loss_fn_inputs["weights"] for datum in submitted.data]
-        train_mean_nll = compute_mean_nll(logprobs_td, weights_td)
-        metrics["train_mean_nll"] = train_mean_nll
+        # train_mean_nll = compute_mean_nll(logprobs_td, weights_td)
+        # metrics["train_mean_nll"] = train_mean_nll
 
-        custom_metrics_path = os.path.join(config.log_path, "custom_metrics.jsonl")
-        with open(custom_metrics_path, "a") as f:
-            for i, datum in enumerate(submitted.data):
-                token_ids = datum.loss_fn_inputs["target_tokens"].data
-                lp_values = logprobs_td[i].tolist()
-                weights = datum.loss_fn_inputs["weights"].data
-                record = {
-                    "step": submitted.step,
-                    "datum": i,
-                    "token_ids": token_ids,
-                    "logprobs": lp_values,
-                    "weights": weights,
-                }
-                f.write(json.dumps(record) + "\n")
+        # custom_metrics_path = os.path.join(config.log_path, "custom_metrics.jsonl")
+        # with open(custom_metrics_path, "a") as f:
+        #     for i, datum in enumerate(submitted.data):
+        #         token_ids = datum.loss_fn_inputs["target_tokens"].data
+        #         # lp_values = logprobs_td[i].tolist()
+        #         weights = datum.loss_fn_inputs["weights"].data
+        #         record = {
+        #             "step": submitted.step,
+        #             "datum": i,
+        #             "token_ids": token_ids,
+        #             "logprobs": lp_values,
+        #             "weights": weights,
+        #         }
+        #         f.write(json.dumps(record) + "\n")
 
         metrics.update(
             num_sequences=len(submitted.data),
