@@ -441,8 +441,21 @@ class KimiK2Renderer(Renderer):
             output_str = ""
             # Extract thinking and text from content list
             parts = ensure_list(content)
-            thinking_content = "".join(p["thinking"] for p in parts if p["type"] == "thinking")
-            text_content = "".join(p["text"] for p in parts if p["type"] == "text")
+            thinking_parts: list[str] = []
+            text_parts: list[str] = []
+            for p in parts:
+                if not isinstance(p, dict):
+                    continue
+                if p.get("type") == "thinking":
+                    body = p.get("thinking")
+                    if body is None:
+                        body = p.get("text", "")
+                    thinking_parts.append("" if body is None else str(body))
+                elif p.get("type") == "text":
+                    body = p.get("text", "")
+                    text_parts.append("" if body is None else str(body))
+            thinking_content = "".join(thinking_parts)
+            text_content = "".join(text_parts)
 
             # Preserve thinking for the last assistant message, or for all messages
             # when strip_thinking_from_history is False.

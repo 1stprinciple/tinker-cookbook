@@ -409,8 +409,20 @@ def ensure_text(content: Content) -> str:
     raise ValueError(f"Expected text content, got multimodal content with {len(content)} parts")
 
 
-def ensure_list(content: Content) -> list[ContentPart]:
-    """Normalize content to list form. Wraps string content in a TextPart."""
+def ensure_list(content: Content | None) -> list[ContentPart]:
+    """Normalize content to list form. Wraps string content in a TextPart.
+
+    Args:
+        content (Content | None): Message content, either a string or a list of
+            ContentPart elements. ``None`` (e.g. JSON ``null`` for tool-only turns)
+            is treated as empty text.
+
+    Returns:
+        list[ContentPart]: The content as a list of ContentPart elements.
+            If the input is a string, it is wrapped in a single TextPart.
+    """
+    if content is None:
+        return [TextPart(type="text", text="")]
     if isinstance(content, str):
         return [TextPart(type="text", text=content)]
     return content
