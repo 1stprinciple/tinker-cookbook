@@ -10,8 +10,30 @@ import chz
 import datasets
 import tinker
 from tinker_cookbook.renderers import Message, Renderer, TrainOnWhat
+from tinker_cookbook.renderers.base import ToolCall
 from tinker_cookbook.supervised.common import datum_from_model_input_weights
 from tinker_cookbook.supervised.types import ChatDatasetBuilder, SupervisedDataset
+
+
+def _normalize_message(msg: Any) -> Any:
+    """Coerce raw JSONL tool_calls dicts into ToolCall pydantic models.
+
+    Renderers access tool_calls via attribute syntax (tool_call.function.name),
+    but data loaded from JSONL arrives as plain dicts. Normalize here so every
+    downstream renderer sees the typed form.
+    """
+    if not isinstance(msg, dict):
+        return msg
+    tcs = msg.get("tool_calls")
+    if not tcs:
+        return msg
+    return {
+        **msg,
+        "tool_calls": [
+            tc if isinstance(tc, ToolCall) else ToolCall.model_validate(tc)
+            for tc in tcs
+        ],
+    }
 
 
 def conversation_to_datum(
@@ -21,6 +43,7 @@ def conversation_to_datum(
     train_on_what: TrainOnWhat = TrainOnWhat.ALL_ASSISTANT_MESSAGES,
 ) -> tinker.Datum:
     """Common function to process a list of messages into a Datum."""
+    conversation = [_normalize_message(m) for m in conversation]
     model_input, weights = renderer.build_supervised_example(
         conversation, train_on_what=train_on_what
     )
