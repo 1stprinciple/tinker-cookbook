@@ -2115,5 +2115,4 @@ async def main(
         rollout_executor.shutdown(wait=True)
         set_rollout_executor(None)
     ml_logger.close()
-    logger.info("Training completed successfully")    ml_logger.close()
     logger.info("Training completed successfully")
