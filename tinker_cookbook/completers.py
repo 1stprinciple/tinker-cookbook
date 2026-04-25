@@ -168,6 +168,7 @@ class FireworksTokenCompleter(TokenCompleter):
         sample_result, _ = await self.sampler.async_completions_stream(
             prompt=model_input.to_ints(),
             n=self.n,
+            stop=stop,
             **self.sample_kwargs(),
         )
         # Extract tokens and logprobs from the first (and only) sample
