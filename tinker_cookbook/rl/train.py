@@ -1347,7 +1347,8 @@ async def save_checkpoint_and_get_sampling_client(
                 kind="sampler",
                 ttl_seconds=ttl_seconds,
             )
-        success = weight_syncer.hotload(path_dict["sampler_path"], checkpoint_type="delta")
+        checkpoint_type = "base" # if config.lora_rank == 0 else "delta"
+        success = weight_syncer.hotload(path_dict["sampler_path"], checkpoint_type=checkpoint_type)
         if not success:
             raise ValueError(f"Failed to save and load checkpoint {path_dict["sampler_path"]}")
         return weight_syncer.get_deployment_sampler(), metrics
@@ -1453,11 +1454,11 @@ async def compute_full_batch_metrics_and_get_sampling_client(
         metrics.
     """
     metrics = {}
-
+    print("training_logprobs_D: ", len(training_logprobs_D))
     # Compute KL metrics
-    async with trace.scope_span("compute_kl_sample_train"):
-        kl_sample_train_metrics = compute_kl_sample_train(data_D, training_logprobs_D)
-        metrics.update(kl_sample_train_metrics)
+    # async with trace.scope_span("compute_kl_sample_train"):
+    #     kl_sample_train_metrics = compute_kl_sample_train(data_D, training_logprobs_D)
+    #     metrics.update(kl_sample_train_metrics)
 
     # Get a sampling client using the new weights
     sampling_client, checkpoint_metrics = await save_checkpoint_and_get_sampling_client(

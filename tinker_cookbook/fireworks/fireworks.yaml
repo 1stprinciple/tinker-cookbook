@@ -5,8 +5,8 @@ account: null  # Fireworks account ID (falls back to FIREWORKS_ACCOUNT_ID env va
 
 # Model Configuration
 model:
-  name: accounts/fireworks/models/qwen3p5-27b
-  lora_rank: 0         # LoRA rank 0 means no LoRA fine-tuning, which is compatible with Fireworks backend
+  name: accounts/fireworks/models/qwen3-4b-instruct-2507
+  lora_rank: 32         # LoRA rank 0 means no LoRA fine-tuning, which is compatible with Fireworks backend
 
 # Training Configuration (fireworks-specific)
 training:
@@ -27,7 +27,7 @@ deployment:
   hot_load_bucket_type: FW_HOSTED  # Bucket type for hot-load snapshots
   deployment_timeout_s: 5400       # Timeout for deployment creation/readiness (90 min)
   deployment_extra_args: null      # Extra Helm args for the deployment
-  tokenizer_model: Qwen/Qwen3.5-27B
+  tokenizer_model: Qwen/Qwen3-4B-Instruct-2507
   sample_timeout: 600              # HTTP read timeout for sampling completions (10 min)
   disable_speculative_decoding: true  # Disable EAGLE speculation for hotload compatibility
   extra_values: null               # Extra Helm values dict (e.g. {"priorityClass": "deployment"})
@@ -39,7 +39,7 @@ hotload:
   dcp_timeout: 2700                # Timeout for DCP save_state / load_state_with_optimizer (45 min)
 
 training_infra:
-  training_shape_id: accounts/fireworks/trainingShapes/qwen3p5-27b-256k
+  training_shape_id: accounts/fireworks/trainingShapes/qwen3-4b-minimum-lora
   training_job_id: null                    # Job ID for the trainer job
   ref_training_shape_id: null      # Shape for reference trainer; falls back to training_shape_id
   region: null
@@ -50,7 +50,7 @@ training_infra:
   node_count: 1                    # Number of training nodes
   extra_args: null                 # Extra CLI args for the trainer job
 
-display_name: "qwen3p5-27b-policy"
-ref_display_name: "qwen3p5-27b-ref"
+display_name: "qwen3-4b-instruct-2507-policy"
+ref_display_name: "qwen3-4b-instruct-2507-ref"
 algorithm:
   kl_beta: 0.0
