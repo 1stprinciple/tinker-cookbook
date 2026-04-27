@@ -33,7 +33,6 @@ from fireworks.training.sdk import (
 )
 from tinker.types import LossFnType
 from tqdm import tqdm
-from transformers import AutoTokenizer
 
 from tinker_cookbook import checkpoint_utils, model_info
 from tinker_cookbook.display import colorize_example
@@ -79,7 +78,7 @@ from tinker_cookbook.rl.types import (
     RLDatasetBuilder,
     TrajectoryGroup,
 )
-from tinker_cookbook.tokenizer_utils import Tokenizer
+from tinker_cookbook.tokenizer_utils import Tokenizer, get_tokenizer
 from tinker_cookbook.utils import logtree, ml_log, trace
 from tinker_cookbook.utils.misc_utils import iteration_dir, safezip, split_list
 
@@ -2021,8 +2020,9 @@ async def main(
         name = f"resume-{start_batch}-base" if start_batch > 0 else "step-0-base"
         weight_syncer.save_and_hotload(name, checkpoint_type="base")
 
-    # Get tokenizer from training client
-    tokenizer = training_client.get_tokenizer()
+    # Load the local tokenizer by public model name. Some Fireworks-hosted model
+    # metadata points at internal paths that are not valid on the client machine.
+    tokenizer = get_tokenizer(config.model_name)
 
     # Create dataset from thunk
     dataset, maybe_test_dataset = await config.dataset_builder()
