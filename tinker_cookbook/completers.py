@@ -174,6 +174,12 @@ class FireworksTokenCompleter(TokenCompleter):
             )
         except Exception as e:
             print(f"Error in FireworksTokenCompleter: {e}")
+            print(f"Stop: {stop}")
+            print(f"Sample kwargs: {self.sample_kwargs()}")
+            print(f"Model input: {model_input}")
+            print(f"N: {self.n}")
+            print(f"HTTP timeout: {self.http_timeout}")
+            # print(f"Logprobs: {self.logprobs}")
         sample_result, _ = await self.sampler.async_completions_stream(
             prompt=model_input.to_ints(),
             n=self.n,
