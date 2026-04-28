@@ -7,5 +7,7 @@ tinker_cookbook/_version.py
 uv.lock
 skills-workspace/
 tinker-debug-workspace/
+output/
+outputs/
 eval_qwen35_35b.md
 run_eval_qwen35.py
