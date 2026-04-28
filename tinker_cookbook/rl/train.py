@@ -290,10 +290,17 @@ def _remove_mask(datum: tinker.Datum) -> tinker.Datum:
     )
 
 
-def _training_logprobs_from_fwd_bwd(
-    fwd_bwd_result: tinker.ForwardBackwardOutput,
+def _cross_entropy_forward_datum(datum: tinker.Datum) -> tinker.Datum:
+    return tinker.Datum(
+        model_input=datum.model_input,
+        loss_fn_inputs={"target_tokens": datum.loss_fn_inputs["target_tokens"]},
+    )
+
+
+def _training_logprobs_from_forward(
+    forward_result: tinker.ForwardBackwardOutput,
 ) -> list[torch.Tensor]:
-    return [output["logprobs"].to_torch() for output in fwd_bwd_result.loss_fn_outputs]
+    return [output["logprobs"].to_torch() for output in forward_result.loss_fn_outputs]
 
 
 @trace.scope
@@ -354,6 +361,9 @@ async def train_step(
     fwd_bwd_future = await training_client.forward_backward_async(
         [_remove_mask(d) for d in batches[0]], loss_fn, loss_fn_config,
     )
+    forward_future = await training_client.forward_async(
+        [_cross_entropy_forward_datum(d) for d in batches[0]], loss_fn="cross_entropy"
+    )
     optim_future = await training_client.optim_step_async(adam_params)
 
     for i in range(len(batches)):
@@ -364,17 +374,28 @@ async def train_step(
                 loss_fn,
                 loss_fn_config,
             )
+            next_forward_future = await training_client.forward_async(
+                [_cross_entropy_forward_datum(d) for d in batches[i + 1]],
+                loss_fn="cross_entropy",
+            )
             next_optim_future = await training_client.optim_step_async(adam_params)
         else:
             next_fwd_bwd_future = None
+            next_forward_future = None
             next_optim_future = None
         # Consume current results
-        fwd_bwd_result = await fwd_bwd_future.result_async()
-        training_logprobs_D.extend(_training_logprobs_from_fwd_bwd(fwd_bwd_result))
+        await fwd_bwd_future.result_async()
+        forward_result = await forward_future.result_async()
+        training_logprobs_D.extend(_training_logprobs_from_forward(forward_result))
         optim_result = await optim_future.result_async()
         # Move to next iteration
-        if next_fwd_bwd_future is not None and next_optim_future is not None:
+        if (
+            next_fwd_bwd_future is not None
+            and next_forward_future is not None
+            and next_optim_future is not None
+        ):
             fwd_bwd_future = next_fwd_bwd_future
+            forward_future = next_forward_future
             optim_future = next_optim_future
 
     if metrics is not None and optim_result is not None and optim_result.metrics:
@@ -1455,9 +1476,9 @@ async def compute_full_batch_metrics_and_get_sampling_client(
     metrics = {}
     print("training_logprobs_D: ", len(training_logprobs_D))
     # Compute KL metrics
-    # async with trace.scope_span("compute_kl_sample_train"):
-    #     kl_sample_train_metrics = compute_kl_sample_train(data_D, training_logprobs_D)
-    #     metrics.update(kl_sample_train_metrics)
+    async with trace.scope_span("compute_kl_sample_train"):
+        kl_sample_train_metrics = compute_kl_sample_train(data_D, training_logprobs_D)
+        metrics.update(kl_sample_train_metrics)
 
     # Get a sampling client using the new weights
     sampling_client, checkpoint_metrics = await save_checkpoint_and_get_sampling_client(
@@ -1540,6 +1561,7 @@ async def do_train_step_streaming_and_get_sampling_client(
         # Once we have enough trajectories for a minibatch, train on them
         wrapped_trajectory_groups = []
         forward_backward_futures: list[tinker.APIFuture[tinker.ForwardBackwardOutput]] = []
+        forward_futures: list[tinker.APIFuture[tinker.ForwardBackwardOutput]] = []
         i_minibatch = 0
         while i_minibatch < config.stream_minibatch_config.num_minibatches:
             wrapped_trajectory_group = await trajectory_groups_queue.get()
@@ -1585,6 +1607,15 @@ async def do_train_step_streaming_and_get_sampling_client(
                         loss_fn_config=config.loss_fn_config,
                     )
                 )
+            async with trace.scope_span(
+                f"train/forward_substep_{i_substep}_mb_{i_minibatch}_enqueue"
+            ):
+                forward_futures.append(
+                    await training_client.forward_async(
+                        [_cross_entropy_forward_datum(d) for d in data_D],
+                        loss_fn="cross_entropy",
+                    )
+                )
             all_data_D.extend(data_D)
             all_wrapped_trajectory_groups.extend(wrapped_trajectory_groups)
             i_minibatch += 1
@@ -1597,11 +1628,13 @@ async def do_train_step_streaming_and_get_sampling_client(
         async with trace.scope_span(f"train/optim_substep_{i_substep}_enqueue"):
             optim_future = await training_client.optim_step_async(adam_params)
 
-        # Now consume all forward-backward results
+        # Now consume all forward-backward and forward results
         for i_mb, fwd_bwd_future in enumerate(forward_backward_futures):
             async with trace.scope_span(f"train/fwd_bwd_substep_{i_substep}_mb_{i_mb}_consume"):
-                fwd_bwd_result = await fwd_bwd_future.result_async()
-                all_training_logprobs_D.extend(_training_logprobs_from_fwd_bwd(fwd_bwd_result))
+                await fwd_bwd_future.result_async()
+            async with trace.scope_span(f"train/forward_substep_{i_substep}_mb_{i_mb}_consume"):
+                forward_result = await forward_futures[i_mb].result_async()
+                all_training_logprobs_D.extend(_training_logprobs_from_forward(forward_result))
 
         async with trace.scope_span(f"train/optim_substep_{i_substep}_consume"):
             optim_result = await optim_future.result_async()
