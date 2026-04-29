@@ -31,6 +31,7 @@ deployment:
   sample_timeout: 600              # HTTP read timeout for sampling completions (10 min)
   disable_speculative_decoding: true  # Disable EAGLE speculation for hotload compatibility
   extra_values: null               # Extra Helm values dict (e.g. {"priorityClass": "deployment"})
+  replica_count: 4
 
 hotload:
   hot_load_interval: 1             # Sync weights to deployment every N steps (0 = disabled)

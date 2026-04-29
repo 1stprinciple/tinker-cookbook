@@ -728,13 +728,9 @@ async def do_sync_training_with_stream_minibatch(
     else:
         sampling_client, _ = await save_checkpoint_and_get_sampling_client(
             training_client,
+            checkpoint_mgr,
             weight_syncer,
             start_batch,
-            config.log_path,
-            config.save_every,
-            start_batch,
-            config.ttl_seconds,
-            store=ml_logger.store,
         )
 
     for i_batch in range(start_batch, end_batch):
@@ -1777,11 +1773,6 @@ async def do_sync_training(
             checkpoint_mgr,
             weight_syncer,
             start_batch,
-            config.log_path,
-            config.save_every,
-            start_batch,
-            config.ttl_seconds,
-            store=ml_logger.store,
         )
 
     for i_batch in range(start_batch, end_batch):

@@ -38,6 +38,7 @@ def _to_deploy_config(cfg_section: DictConfig) -> DeployConfig:
         deployment_id=cfg_section.get("deployment_id"),
         deployment_shape=cfg_section.get("deployment_shape"),
         deployment_region=cfg_section.get("deployment_region"),
+        replica_count=cfg_section.get("replica_count"),
         deployment_accelerator_type=cfg_section.get("deployment_accelerator_type"),
         hot_load_bucket_type=cfg_section.get("hot_load_bucket_type", "FW_HOSTED"),
         deployment_timeout_s=cfg_section.get("deployment_timeout_s", 5400),
