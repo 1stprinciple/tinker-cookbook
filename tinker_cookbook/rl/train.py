@@ -107,7 +107,7 @@ class KLReferenceConfig:
 async def gather_with_progress(
     coroutines: Iterable[Coroutine[Any, Any, T]],
     desc: str,
-    max_concurrency: int = 1
+    max_concurrency: int = 4
 ) -> list[T]:
     """Run coroutines concurrently with a progress bar that updates as each completes.
 
