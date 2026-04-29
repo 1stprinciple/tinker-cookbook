@@ -150,7 +150,7 @@ class FireworksTokenCompleter(TokenCompleter):
     max_tokens: int
     n: int = 1
     temperature: float = 1.0
-    http_timeout: float = 120.0
+    http_timeout: float = 3600
 
     def sample_kwargs(self) -> dict:
         return dict(
