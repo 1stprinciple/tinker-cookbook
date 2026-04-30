@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+from typing import cast
 
 from dotenv import load_dotenv
 from fireworks.training.sdk import TrainerJobManager
@@ -70,36 +71,55 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def main() -> None:
-    args = parse_args()
-
-    api_key = os.environ["FIREWORKS_API_KEY"]
-    base_url = os.environ.get("FIREWORKS_BASE_URL", "https://api.fireworks.ai")
+def promote_checkpoint(
+    *,
+    source_job_id: str,
+    sampler_path: str,
+    output_model_id: str,
+    base_model: str,
+    hot_load_deployment_id: str | None = None,
+    api_key: str | None = None,
+    base_url: str | None = None,
+) -> dict[str, object]:
+    api_key = api_key or os.environ["FIREWORKS_API_KEY"]
+    base_url = base_url or os.environ.get("FIREWORKS_BASE_URL", "https://api.fireworks.ai")
     client = TrainerJobManager(api_key=api_key, base_url=base_url)
 
-    logger.info("Checkpoint:      %s", args.sampler_path)
-    logger.info("Source job:      %s", args.source_job_id)
-    logger.info("Base model:      %s", args.base_model)
-    logger.info("Output model ID: %s", args.output_model_id)
-    if args.hot_load_deployment_id:
-        logger.info("Deployment ID:   %s (legacy)", args.hot_load_deployment_id)
+    logger.info("Checkpoint:      %s", sampler_path)
+    logger.info("Source job:      %s", source_job_id)
+    logger.info("Base model:      %s", base_model)
+    logger.info("Output model ID: %s", output_model_id)
+    if hot_load_deployment_id:
+        logger.info("Deployment ID:   %s (legacy)", hot_load_deployment_id)
 
     model = client.promote_checkpoint(
-        args.source_job_id,
-        args.sampler_path,
-        args.output_model_id,
-        args.base_model,
-        hot_load_deployment_id=args.hot_load_deployment_id,
+        source_job_id,
+        sampler_path,
+        output_model_id,
+        base_model,
+        hot_load_deployment_id=hot_load_deployment_id,
     )
 
     logger.info(
         "Promoted model: %s",
-        model.get("name", f"accounts/{client.account_id}/models/{args.output_model_id}"),
+        model.get("name", f"accounts/{client.account_id}/models/{output_model_id}"),
     )
     logger.info(
         "Model state=%s kind=%s",
         model.get("state", "UNKNOWN"),
         model.get("kind", "UNKNOWN"),
+    )
+    return cast(dict[str, object], model)
+
+
+def main() -> None:
+    args = parse_args()
+    promote_checkpoint(
+        source_job_id=args.source_job_id,
+        sampler_path=args.sampler_path,
+        output_model_id=args.output_model_id,
+        base_model=args.base_model,
+        hot_load_deployment_id=args.hot_load_deployment_id,
     )
 
 
