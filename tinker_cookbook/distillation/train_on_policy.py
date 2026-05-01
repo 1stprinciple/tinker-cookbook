@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from collections.abc import Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
@@ -17,20 +18,31 @@ if TYPE_CHECKING:
 import chz
 import tinker
 import torch
+from fireworks.training.sdk import (
+    DeploymentManager,
+    FiretitanServiceClient,
+    FiretitanTrainingClient,
+    WeightSyncer,
+)
 from tinker.types import LossFnType
-
 from tinker_cookbook import checkpoint_utils, model_info
 from tinker_cookbook.display import colorize_example
 from tinker_cookbook.distillation.datasets import (
     CompositeDataset,
     DistillationDatasetConfig,
 )
-from tinker_cookbook.eval.evaluators import SamplingClientEvaluator, SamplingClientEvaluatorBuilder
+from tinker_cookbook.eval.evaluators import (
+    SamplingClientEvaluator,
+    SamplingClientEvaluatorBuilder,
+)
 from tinker_cookbook.rl.data_processing import (
     assemble_training_data,
     compute_advantages,
 )
-from tinker_cookbook.rl.metric_util import RLTestSetEvaluator, compute_trajectory_metrics
+from tinker_cookbook.rl.metric_util import (
+    RLTestSetEvaluator,
+    compute_trajectory_metrics,
+)
 from tinker_cookbook.rl.metrics import discounted_future_sum_vectorized
 from tinker_cookbook.rl.train import (
     compute_full_batch_metrics_and_get_sampling_client,
@@ -38,10 +50,7 @@ from tinker_cookbook.rl.train import (
     save_checkpoint_and_get_sampling_client,
     train_step,
 )
-from tinker_cookbook.rl.types import (
-    EnvGroupBuilder,
-    TrajectoryGroup,
-)
+from tinker_cookbook.rl.types import EnvGroupBuilder, TrajectoryGroup
 from tinker_cookbook.tokenizer_utils import Tokenizer
 from tinker_cookbook.utils import ml_log, trace
 from tinker_cookbook.utils.misc_utils import iteration_dir, safezip
@@ -165,6 +174,11 @@ class Config:
     save_every: int = 20
     load_checkpoint_path: str | None = None
 
+    # Fireworks-specific configuration
+    fireworks_base_model_name: str | None = None
+    fireworks_deployment_id: str | None = None
+    fireworks_hot_load_timeout: int = 600
+
     # Maximum number of training steps. If None, train on the full dataset.
     max_steps: int | None = None
 
@@ -228,9 +242,10 @@ async def prepare_minibatch(
 async def do_train_step_and_get_sampling_client(
     config: Config,
     i_batch: int,
-    training_client: tinker.TrainingClient,
+    training_client: FiretitanTrainingClient,
     checkpoint_mgr: checkpoint_utils.CheckpointManager,
-    service_client: tinker.ServiceClient,
+    service_client: FiretitanServiceClient,
+    weight_syncer: WeightSyncer,
     tokenizer: Tokenizer,
     env_group_builders_P: Sequence[EnvGroupBuilder],
     trajectory_groups_P: list[TrajectoryGroup],
@@ -266,6 +281,7 @@ async def do_train_step_and_get_sampling_client(
     sampling_client, full_batch_metrics = await compute_full_batch_metrics_and_get_sampling_client(
         training_client,
         checkpoint_mgr,
+        weight_syncer,
         # NOTE: saving the checkpoint as the i + 1 step
         i_batch + 1,
         data_D,
@@ -283,9 +299,10 @@ async def do_sync_training(
     end_batch: int,
     num_batches: int,
     config: Config,
-    training_client: tinker.TrainingClient,
+    training_client: FiretitanTrainingClient,
     checkpoint_mgr: checkpoint_utils.CheckpointManager,
-    service_client: tinker.ServiceClient,
+    service_client: FiretitanServiceClient,
+    weight_syncer: WeightSyncer,
     evaluators: list[SamplingClientEvaluator],
     dataset: CompositeDataset,
     teacher_clients: list[tinker.SamplingClient],
@@ -296,7 +313,7 @@ async def do_sync_training(
 
     # Initial sampling client
     sampling_client, _ = await save_checkpoint_and_get_sampling_client(
-        training_client, checkpoint_mgr, start_batch, start_batch
+        training_client, checkpoint_mgr, weight_syncer, start_batch, config.log_path, config.save_every, store=ml_logger.store
     )
 
     log_path = Path(config.log_path)
@@ -347,6 +364,7 @@ async def do_sync_training(
                 training_client,
                 checkpoint_mgr,
                 service_client,
+                weight_syncer,
                 tokenizer,
                 env_group_builders_P,
                 trajectory_groups_P,
@@ -400,13 +418,20 @@ async def main(
     else:
         start_batch = 0
 
-    service_client = tinker.ServiceClient(base_url=config.base_url)
+    service_client = FiretitanServiceClient(
+        base_url=config.base_url,
+        api_key=os.environ["FIREWORKS_API_KEY"],
+    )
     user_metadata: dict[str, str] = {}
     if wandb_link := ml_logger.get_logger_url():
         user_metadata["wandb_link"] = wandb_link
     checkpoint_utils.add_renderer_name_to_user_metadata(user_metadata, config.renderer_name)
     model_info.warn_if_renderer_not_recommended(config.model_name, config.renderer_name)
 
+    training_client = service_client.create_training_client(
+        base_model=config.model_name,
+        lora_rank=config.lora_rank,
+    )
     if resume_info:
         # Resuming interrupted training - load optimizer state for proper continuation
         await checkpoint_utils.check_renderer_name_for_checkpoint_async(
@@ -427,10 +452,19 @@ async def main(
             config.load_checkpoint_path, user_metadata=user_metadata
         )
         logger.info(f"Loaded weights from {config.load_checkpoint_path}")
-    else:
-        training_client = await service_client.create_lora_training_client_async(
-            config.model_name, rank=config.lora_rank, user_metadata=user_metadata
-        )
+        training_client.load_state(config.load_checkpoint_path)
+
+    deploy_mgr = DeploymentManager(api_key=os.environ["FIREWORKS_API_KEY"])
+    weight_syncer = WeightSyncer(
+        policy_client=training_client,
+        deploy_mgr=deploy_mgr,
+        deployment_id=config.fireworks_deployment_id,
+        base_model=config.fireworks_base_model_name,
+        hotload_timeout=config.fireworks_hot_load_timeout,
+    )
+    if config.fireworks_deployment_id:
+        name = f"resume-{start_batch}-base" if start_batch > 0 else "step-0-base"
+        weight_syncer.save_and_hotload(name, checkpoint_type="base")
 
     # Get tokenizer from training client
     tokenizer = training_client.get_tokenizer()
@@ -491,6 +525,7 @@ async def main(
         training_client=training_client,
         checkpoint_mgr=checkpoint_mgr,
         service_client=service_client,
+        weight_syncer=weight_syncer,
         evaluators=evaluators,
         dataset=composite_dataset,
         teacher_clients=teacher_clients,
@@ -505,5 +540,7 @@ async def main(
         logger.info("Training was already complete; nothing to do")
 
     # Cleanup
+    ml_logger.close()
+    logger.info("Training completed successfully")
     ml_logger.close()
     logger.info("Training completed successfully")
